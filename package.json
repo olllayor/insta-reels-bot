@@ -1,0 +1,27 @@
+{
+	"name": "insta-reel-bot",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"type": "module",
+	"scripts": {
+		"start": "tsx bot.ts",
+		"dev": "tsx watch bot.ts"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"packageManager": "pnpm@10.13.1",
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"ts-node": "^10.9.2",
+		"tsx": "^4.20.4",
+		"typescript": "^5.9.2"
+	},
+	"dependencies": {
+		"dotenv": "^17.2.1",
+		"grammy": "^1.37.1",
+		"node-fetch": "^3.3.2",
+		"telegraf": "^4.16.3"
+	}
+}
