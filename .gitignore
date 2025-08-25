@@ -1,33 +1,59 @@
-# Dependencies
+##############################
+# Dependencies & package mgr #
+##############################
 node_modules/
+package-lock.json
+yarn.lock
+pnpm-debug.log*
 
-# Environment
+#############
+# Env files #
+#############
 .env
 .env.*
 !.env.example
 
-# Logs
+################
+# Build output #
+################
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+########
+# Logs #
+########
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-
-# OS / Editor
-.DS_Store
-.vscode/
-.idea/
-*.swp
-
-# Build output
-/build
-/dist
-*.tsbuildinfo
-
-# Runtime
 *.log
 
-# TypeScript
-coverage/
+############
+# Database #
+############
+db.sqlite3
+db.sqlite3-* 
+*.sqlite
+backups/
+*.zip
 
-# Misc
-*.local
+#############
+# Cookies   #
+#############
+cookies/
+
+#############
+# IDE / OS  #
+#############
+.DS_Store
+.idea/
+.vscode/
+
+###########
+# Misc    #
+###########
+*.pid
+*.swp
+*.tmp
+tmp/

@@ -6,19 +6,24 @@
 	"type": "module",
 	"scripts": {
 		"start": "tsx bot.ts",
-		"dev": "tsx watch bot.ts"
+		"dev": "tsx watch bot.ts",
+		"cron": "tsx cron.ts"
 	},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",
 	"packageManager": "pnpm@10.13.1",
 	"devDependencies": {
+		"@types/adm-zip": "^0.5.7",
+		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^24.3.0",
 		"ts-node": "^10.9.2",
 		"tsx": "^4.20.4",
 		"typescript": "^5.9.2"
 	},
 	"dependencies": {
+		"adm-zip": "^0.5.10",
+		"better-sqlite3": "^12.2.0",
 		"dotenv": "^17.2.1",
 		"grammy": "^1.37.1",
 		"node-fetch": "^3.3.2",
