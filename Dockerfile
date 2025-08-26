@@ -1,5 +1,13 @@
-# Lightweight Node.js base image
+# Use a more compatible base image with Python and build tools
 FROM node:20-alpine
+
+# Install build dependencies for better-sqlite3
+RUN apk add --no-cache \
+  python3 \
+  make \
+  g++ \
+  sqlite \
+  sqlite-dev
 
 # Create app directory
 WORKDIR /app
@@ -10,20 +18,29 @@ RUN corepack enable \
 
 # Install dependencies first (better caching)
 COPY package.json pnpm-lock.yaml ./
-# We explicitly install dev deps because the app runs with tsx (a devDependency)
-RUN pnpm install --frozen-lockfile --prod=false
+
+# Install dependencies and rebuild better-sqlite3
+RUN pnpm install --frozen-lockfile --prod=false \
+  && cd node_modules/.pnpm/better-sqlite3*/node_modules/better-sqlite3 \
+  && npm run build-release || true
 
 # Copy the rest of the source code
 COPY . .
 
+# Create data directory for database with proper permissions
+RUN mkdir -p /app/data && chmod 755 /app/data
+
 # Set environment to production at runtime
 ENV NODE_ENV=production
+
+# Make start script executable
+RUN chmod +x /app/start.sh
+
+# Change ownership of app directory to node user
+RUN chown -R node:node /app
 
 # Run as non-root user for safety
 USER node
 
-# Start the Telegram bot
-# Required envs at runtime: BOT_TOKEN, API_ENDPOINT
-CMD ["pnpm", "start"]
-
-
+# Start both bot and cron
+CMD ["./start.sh"]
