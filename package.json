@@ -27,6 +27,7 @@
 		"dotenv": "^17.2.1",
 		"grammy": "^1.37.1",
 		"node-fetch": "^3.3.2",
+		"set-cookie-parser": "^2.7.1",
 		"telegraf": "^4.16.3"
 	}
 }

@@ -12,22 +12,22 @@ export interface DownloaderErrorResponseMinimal {
 
 export type DownloaderResponse = DownloaderSuccessResponseMinimal | DownloaderErrorResponseMinimal;
 
-// Performs the POST call and returns a typed / validated response
-export const downloadInstagramContent = async (reelUrl: string): Promise<DownloaderResponse> => {
-	const endpoint = process.env.API_ENDPOINT;
-	if (!endpoint) {
-		return { success: false, error: 'Server misconfiguration: API_ENDPOINT missing', elapsedMs: 0 };
-	}
+// Performs the POST call to cobalt endpoint and returns a typed / validated response
+export const downloadInstagramContent = async (mediaUrl: string): Promise<DownloaderResponse> => {
+	// Prefer env but default to cobalt for convenience
+	const endpoint = process.env.API_ENDPOINT || 'https://cobalt.ollayor.uz/';
+	const timeoutMs = Number(process.env.DOWNLOADER_TIMEOUT_MS || 20000);
 
 	try {
 		const started = performance.now();
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 25_000); // 25s timeout
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 		const result = await fetch(endpoint, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ reelURL: reelUrl }), // backend expects `reelURL`
+			headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+			// cobalt expects { url, videoQuality? } where videoQuality only accepts "max" currently
+			body: JSON.stringify({ url: mediaUrl, videoQuality: 'max' }),
 			signal: controller.signal,
 		});
 		clearTimeout(timeout);
@@ -39,7 +39,7 @@ export const downloadInstagramContent = async (reelUrl: string): Promise<Downloa
 			try {
 				const errorBody = await result.text();
 				const parsed = JSON.parse(errorBody);
-				errorDetail = parsed.details || parsed.error || errorDetail;
+				errorDetail = (typeof parsed?.error === 'string' ? parsed.error : String(parsed?.error?.code)) || errorDetail;
 			} catch {
 				// fallback to status code
 			}
@@ -56,15 +56,20 @@ export const downloadInstagramContent = async (reelUrl: string): Promise<Downloa
 
 		const elapsedMs = Math.round(performance.now() - started);
 
-		// Accept either new minimal server contract or legacy structure.
-		if (json?.downloadUrl) {
-			return { success: true, url: json.downloadUrl, elapsedMs };
+		// cobalt: { status: 'redirect' | 'success' | 'error', url?, filename?, error? }
+		if (typeof json === 'object' && json) {
+			if ((json.status === 'redirect' || json.status === 'success') && typeof json.url === 'string') {
+				return { success: true, url: json.url, elapsedMs };
+			}
+			if (json.status === 'error') {
+				const err = typeof json.error === 'string' ? json.error : json.error?.code || 'Unknown API error';
+				return { success: false, error: String(err), elapsedMs };
+			}
+			// legacy support
+			if (json.downloadUrl) return { success: true, url: json.downloadUrl, elapsedMs };
+			if (json.url) return { success: true, url: json.url, elapsedMs };
 		}
-		if (json?.url) {
-			return { success: true, url: json.url, elapsedMs };
-		}
-		const errorMessage = json?.error || json?.message || 'Unknown API error';
-		return { success: false, error: errorMessage, elapsedMs };
+		return { success: false, error: 'Unknown API response', elapsedMs };
 	} catch (err: any) {
 		const elapsedMs = 0; // unknown (failed early)
 		if (err?.name === 'AbortError') {

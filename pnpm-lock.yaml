@@ -23,6 +23,9 @@ importers:
       node-fetch:
         specifier: ^3.3.2
         version: 3.3.2
+      set-cookie-parser:
+        specifier: ^2.7.1
+        version: 2.7.1
       telegraf:
         specifier: ^4.16.3
         version: 4.16.3
@@ -469,6 +472,9 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  set-cookie-parser@2.7.1:
+    resolution: {integrity: sha512-IOc8uWeOZgnb3ptbCURJWNjWUPcO3ZnTTdzsurqERrP6nPyv+paC55vJM0LpOlT2ne+Ix+9+CRG1MNLlyZ4GjQ==}
+
   simple-concat@1.0.1:
     resolution: {integrity: sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q==}
 
@@ -889,6 +895,8 @@ snapshots:
   sandwich-stream@2.0.2: {}
 
   semver@7.7.2: {}
+
+  set-cookie-parser@2.7.1: {}
 
   simple-concat@1.0.1: {}
 

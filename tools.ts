@@ -39,3 +39,17 @@ export function isInstagramUrl(url: string): boolean {
 	}
 }
 
+export type Platform = 'instagram' | 'twitter' | 'youtube' | 'unknown';
+
+export function detectPlatform(url: string): Platform {
+	try {
+		const u = new URL(url);
+		const host = u.hostname.toLowerCase();
+		if (host.includes('instagram.com') || host.includes('instagr.am')) return 'instagram';
+		if (host === 'x.com' || host.endsWith('twitter.com') || host.includes('twimg.com')) return 'twitter';
+		if (host.includes('youtube.com') || host === 'youtu.be') return 'youtube';
+		return 'unknown';
+	} catch {
+		return 'unknown';
+	}
+}
