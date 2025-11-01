@@ -5,9 +5,9 @@
 	"main": "index.js",
 	"type": "module",
 	"scripts": {
-		"start": "tsx bot.ts",
-		"dev": "tsx watch bot.ts",
-		"cron": "tsx cron.ts"
+		"start": "npx tsx bot.ts",
+		"dev": "npx tsx watch bot.ts",
+		"cron": "npx tsx cron.ts"
 	},
 	"keywords": [],
 	"author": "",
