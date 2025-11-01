@@ -22,7 +22,8 @@ COPY package.json pnpm-lock.yaml ./
 # Install dependencies and rebuild better-sqlite3
 RUN pnpm install --frozen-lockfile \
   && cd node_modules/.pnpm/better-sqlite3*/node_modules/better-sqlite3 \
-  && npm run build-release || true
+  && npm run build-release \
+  && npm rebuild better-sqlite3
 
 # Copy the rest of the source code
 COPY . .
