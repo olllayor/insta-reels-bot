@@ -20,7 +20,7 @@ RUN corepack enable \
 COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies and rebuild better-sqlite3
-RUN pnpm install --frozen-lockfile --prod=false \
+RUN pnpm install --frozen-lockfile \
   && cd node_modules/.pnpm/better-sqlite3*/node_modules/better-sqlite3 \
   && npm run build-release || true
 
@@ -38,6 +38,10 @@ RUN chmod +x /app/start.sh
 
 # Change ownership of app directory to node user
 RUN chown -R node:node /app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "console.log('ok')" || exit 1
 
 # Run as non-root user for safety
 USER node
