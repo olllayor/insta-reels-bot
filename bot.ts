@@ -4,20 +4,41 @@ import { isInstagramUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
 import { saveUserAndVideo, saveOrUpdateUser, getAdminStats } from './db.js';
 
+// Simple logger with timestamp
+const log = (level: 'INFO' | 'WARN' | 'ERROR', message: string, data?: any) => {
+	const timestamp = new Date().toISOString();
+	const prefix = `[${timestamp}] [${level}]`;
+	if (data) {
+		console.log(`${prefix} ${message}`, data);
+	} else {
+		console.log(`${prefix} ${message}`);
+	}
+};
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
 	console.error('BOT_TOKEN is missing in environment. Exiting to avoid restart loop.');
 	process.exit(1);
 }
 
-console.log('Bot initialized.');
+log('INFO', 'Bot initialized.');
 const bot = new Bot(BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID || '0');
 
 bot.command('start', async (ctx) => {
 	try {
-		if (ctx.from) saveOrUpdateUser(ctx.from);
-	} catch {}
+		if (ctx.from) {
+			saveOrUpdateUser(ctx.from);
+			log('INFO', `User saved or updated`, {
+				userId: ctx.from.id,
+				username: ctx.from.username || 'N/A',
+				firstName: ctx.from.first_name,
+				isFirstTime: !ctx.from.is_bot,
+			});
+		}
+	} catch (err) {
+		log('WARN', `Failed to save user ${ctx.from?.id}`, err);
+	}
 	await ctx.reply('Send me an Instagram Reel link (post/reel) and I will fetch the video for you.');
 });
 
@@ -43,7 +64,7 @@ bot.command('admin', async (ctx) => {
 • Avg Videos/User: ${stats.avgVideosPerUser}
 
 🏆 <b>Top Users</b>
-${stats.topUsers.map((u, i) => `${i + 1}. ${u.username}: ${u.videoCount} videos`).join('\n') || 'No data'}
+${stats.topUsers.map((u, i) => `${i + 1}. @${u.username}: ${u.videoCount} videos`).join('\n') || 'No data'}
 `;
 	await ctx.reply(message, { parse_mode: 'HTML' });
 });
@@ -96,6 +117,12 @@ Just send me an Instagram Reel link and I'll download it for you!
 bot.on('message:text', async (ctx) => {
 	const text = ctx.message.text;
 	if (isInstagramUrl(text)) {
+		log('INFO', `Instagram URL received from user`, {
+			userId: ctx.from?.id,
+			username: ctx.from?.username || 'N/A',
+			url: text,
+		});
+
 		try {
 			await ctx.reply('🔄 Fetching reel...');
 			const response = await downloadInstagramContent(text);
@@ -110,27 +137,44 @@ bot.on('message:text', async (ctx) => {
 				} else if (errorMsg.includes('timeout')) {
 					userMessage = '❌ Request timed out. Please try again.';
 				}
+				log('WARN', `Download failed for user`, {
+					userId: ctx.from?.id,
+					username: ctx.from?.username,
+					error: errorMsg,
+				});
 				return await ctx.reply(userMessage);
 			}
 			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
 			const caption = `⏱ ${response.elapsedMs} ms | @SaveReelsNowBot`;
 			await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });
+
 			// Send to channel for persistence and get file_id
 			let fileId: string | undefined;
 			try {
 				const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, { supports_streaming: true, caption });
 				fileId = channelMsg.video?.file_id;
 			} catch (channelErr) {
-				console.warn('Failed to send to channel:', channelErr);
+				log('WARN', `Failed to send to channel`, { error: channelErr });
 			}
+
 			// Persist user and video
 			try {
 				saveUserAndVideo(ctx.from!, response.url, text, fileId);
+				log('INFO', `Video successfully saved for user`, {
+					userId: ctx.from?.id,
+					username: ctx.from?.username || 'N/A',
+					responseTime: `${response.elapsedMs}ms`,
+					hasFileId: !!fileId,
+				});
 			} catch (persistErr) {
-				console.warn('Failed to persist video record:', persistErr);
+				log('WARN', `Failed to persist video record`, { userId: ctx.from?.id, error: persistErr });
 			}
 		} catch (error) {
-			console.error('Download error:', error);
+			log('ERROR', `Download error for user`, {
+				userId: ctx.from?.id,
+				username: ctx.from?.username || 'N/A',
+				error: error,
+			});
 			await ctx.reply('❌ Failed to process the URL. Please try again.');
 		}
 	}
