@@ -18,7 +18,7 @@ bot.command('start', async (ctx) => {
 	try {
 		if (ctx.from) saveOrUpdateUser(ctx.from);
 	} catch {}
-	await ctx.reply('Send me an Instagram Reel link (post/reel) and I will fetch the video for you.');
+	await ctx.reply('Send me an Instagram Reel or Story link (post/reel/story) and I will fetch the video for you.');
 });
 
 bot.command('admin', async (ctx) => {
@@ -97,7 +97,7 @@ bot.on('message:text', async (ctx) => {
 	const text = ctx.message.text;
 	if (isInstagramUrl(text)) {
 		try {
-			await ctx.reply('🔄 Fetching reel...');
+			await ctx.reply('🔄 Fetching content...');
 			const response = await downloadInstagramContent(text);
 			if (!response.success) {
 				// Type narrowing: response is now DownloaderErrorResponseMinimal
