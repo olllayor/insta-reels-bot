@@ -199,4 +199,12 @@ export function getAdminStats(): AdminStats {
 	};
 }
 
+export function getAllUserIds(): number[] {
+	if (!db) return [];
+	const result = db.prepare('SELECT telegram_id FROM users ORDER BY telegram_id ASC').all() as Array<{
+		telegram_id: number;
+	}>;
+	return result.map((r) => r.telegram_id);
+}
+
 export { db, DB_PATH };

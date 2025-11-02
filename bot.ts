@@ -2,7 +2,7 @@ import { Bot } from 'grammy';
 import 'dotenv/config';
 import { isValidMediaUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
-import { saveUserAndVideo, saveOrUpdateUser, getAdminStats } from './db.js';
+import { saveUserAndVideo, saveOrUpdateUser, getAdminStats, getAllUserIds } from './db.js';
 
 // Simple logger with timestamp
 const log = (level: 'INFO' | 'WARN' | 'ERROR', message: string, data?: any) => {
@@ -102,6 +102,52 @@ bot.command('stats', async (ctx) => {
 	await ctx.reply(message, { parse_mode: 'HTML' });
 });
 
+bot.command('broadcast', async (ctx) => {
+	if (!ADMIN_ID || ctx.from?.id !== ADMIN_ID) {
+		await ctx.reply('❌ You do not have permission to use this command.');
+		return;
+	}
+
+	const text = ctx.message?.text || '';
+	const args = text.split(' ').slice(1).join(' ') || '';
+	if (!args) {
+		await ctx.reply('❌ Please provide a message to broadcast.\n\nUsage: /broadcast <message>');
+		return;
+	}
+
+	const userIds = getAllUserIds();
+	if (userIds.length === 0) {
+		await ctx.reply('❌ No users to broadcast to.');
+		return;
+	}
+
+	await ctx.reply(`📢 Broadcasting message to ${userIds.length} users...\nThis may take a moment.`);
+
+	let successCount = 0;
+	let failureCount = 0;
+
+	for (const userId of userIds) {
+		try {
+			await ctx.api.sendMessage(userId, args, { parse_mode: 'HTML' });
+			successCount++;
+		} catch (error) {
+			log('WARN', `Failed to send broadcast to user ${userId}`, error);
+			failureCount++;
+		}
+	}
+
+	log('INFO', `Broadcast completed`, {
+		totalUsers: userIds.length,
+		successCount,
+		failureCount,
+		message: args,
+	});
+
+	await ctx.reply(
+		`✅ Broadcast completed!\n\n📊 Results:\n• Sent: ${successCount}/${userIds.length}\n• Failed: ${failureCount}/${userIds.length}`,
+	);
+});
+
 bot.command('help', async (ctx) => {
 	const isAdmin = ADMIN_ID && ctx.from?.id === ADMIN_ID;
 	const message = `
@@ -109,7 +155,11 @@ bot.command('help', async (ctx) => {
 
 /start - Get started
 /help - Show this message
-${isAdmin ? '/admin - View bot analytics\n/stats - View detailed statistics' : ''}
+${
+	isAdmin
+		? '/admin - View bot analytics\n/stats - View detailed statistics\n/broadcast - Send message to all users'
+		: ''
+}
 
 Send me a media link from any supported platform and I'll download the video for you!
 
