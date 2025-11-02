@@ -39,6 +39,16 @@ try {
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   );`);
 
+	database.exec(`CREATE TABLE IF NOT EXISTS broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    total_users INTEGER NOT NULL,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );`);
+
 	// Migration: add user_ref if missing
 	try {
 		const pragma = database.prepare('PRAGMA table_info(videos)').all() as { name: string }[];
@@ -205,6 +215,86 @@ export function getAllUserIds(): number[] {
 		telegram_id: number;
 	}>;
 	return result.map((r) => r.telegram_id);
+}
+
+export interface BroadcastRecord {
+	id: number;
+	admin_id: number;
+	message: string;
+	total_users: number;
+	success_count: number;
+	failure_count: number;
+	created_at: string;
+}
+
+export function saveBroadcast(
+	adminId: number,
+	message: string,
+	totalUsers: number,
+	successCount: number,
+	failureCount: number,
+) {
+	if (!db) return;
+	try {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO broadcasts (admin_id, message, total_users, success_count, failure_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+		).run(adminId, message, totalUsers, successCount, failureCount, now);
+	} catch (e) {
+		console.warn('Failed to save broadcast record:', e);
+	}
+}
+
+export interface BroadcastStats {
+	totalBroadcasts: number;
+	lastBroadcast: BroadcastRecord | null;
+	totalMessagesSent: number;
+	broadcasts: BroadcastRecord[];
+}
+
+export function getBroadcastStats(): BroadcastStats {
+	if (!db) {
+		return {
+			totalBroadcasts: 0,
+			lastBroadcast: null,
+			totalMessagesSent: 0,
+			broadcasts: [],
+		};
+	}
+
+	try {
+		const totalResult = db.prepare('SELECT COUNT(*) as c FROM broadcasts').get() as { c: number };
+		const totalBroadcasts = totalResult.c;
+
+		const lastResult = db.prepare('SELECT * FROM broadcasts ORDER BY created_at DESC LIMIT 1').get() as
+			| BroadcastRecord
+			| undefined;
+
+		const sentResult = db.prepare('SELECT SUM(success_count) as total FROM broadcasts').get() as {
+			total: number | null;
+		};
+		const totalMessagesSent = sentResult.total || 0;
+
+		const broadcastsResult = db
+			.prepare('SELECT * FROM broadcasts ORDER BY created_at DESC LIMIT 10')
+			.all() as BroadcastRecord[];
+
+		return {
+			totalBroadcasts,
+			lastBroadcast: lastResult || null,
+			totalMessagesSent,
+			broadcasts: broadcastsResult,
+		};
+	} catch (e) {
+		console.warn('Failed to get broadcast stats:', e);
+		return {
+			totalBroadcasts: 0,
+			lastBroadcast: null,
+			totalMessagesSent: 0,
+			broadcasts: [],
+		};
+	}
 }
 
 export { db, DB_PATH };
