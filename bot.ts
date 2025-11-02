@@ -178,7 +178,7 @@ bot.on('message:text', async (ctx) => {
 		});
 
 		try {
-			await ctx.reply('🔄 Fetching reel...');
+			await ctx.reply('🔄 Fetching media...');
 			const response = await downloadInstagramContent(text);
 			if (!response.success) {
 				// Type narrowing: response is now DownloaderErrorResponseMinimal
