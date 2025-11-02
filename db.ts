@@ -17,7 +17,13 @@ try {
 	db = new Database(DB_PATH);
 	const database = db!; // Non-null assertion since we just assigned it
 
+	// Enable WAL mode for better concurrency under load
 	database.pragma('journal_mode = WAL');
+	// Faster writes: don't fsync after every transaction (trade-off: durability for speed)
+	// Safe for our use case (download metadata); Telegram handles actual file persistence
+	database.pragma('synchronous = NORMAL');
+	// Increase cache to reduce I/O
+	database.pragma('cache_size = -64000'); // ~64MB cache
 	database.exec(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE NOT NULL,

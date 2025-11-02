@@ -22,6 +22,42 @@ const log = (level: 'INFO' | 'WARN' | 'ERROR', message: string, data?: any) => {
 	}
 };
 
+// Simple metrics tracker for API response times
+interface Metrics {
+	totalRequests: number;
+	totalTime: number;
+	minTime: number;
+	maxTime: number;
+	avgTime: () => number;
+}
+const metrics: Metrics = {
+	totalRequests: 0,
+	totalTime: 0,
+	minTime: Infinity,
+	maxTime: 0,
+	avgTime: function () {
+		return this.totalRequests === 0 ? 0 : Math.round(this.totalTime / this.totalRequests);
+	},
+};
+
+const trackMetric = (elapsedMs: number) => {
+	metrics.totalRequests++;
+	metrics.totalTime += elapsedMs;
+	metrics.minTime = Math.min(metrics.minTime, elapsedMs);
+	metrics.maxTime = Math.max(metrics.maxTime, elapsedMs);
+};
+
+// Log metrics every 10 downloads
+const logMetricsIfNeeded = () => {
+	if (metrics.totalRequests > 0 && metrics.totalRequests % 10 === 0) {
+		log('INFO', `Metrics (${metrics.totalRequests} downloads)`, {
+			avgMs: metrics.avgTime(),
+			minMs: metrics.minTime,
+			maxMs: metrics.maxTime,
+		});
+	}
+};
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
 	console.error('BOT_TOKEN is missing in environment. Exiting to avoid restart loop.');
@@ -405,6 +441,11 @@ bot.on('message:text', async (ctx) => {
 				});
 				return await ctx.reply(userMessage);
 			}
+
+			// Track metrics for performance monitoring
+			trackMetric(response.elapsedMs);
+			logMetricsIfNeeded();
+
 			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
 			const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
 			await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });

@@ -12,6 +12,10 @@ export interface DownloaderErrorResponseMinimal {
 
 export type DownloaderResponse = DownloaderSuccessResponseMinimal | DownloaderErrorResponseMinimal;
 
+// NOTE: Node.js 18+ fetch uses HTTP keep-alive by default, automatically reusing TCP connections
+// for requests to the same host. This eliminates TCP handshake overhead (~100-200ms per request).
+// No explicit agent configuration needed; connections are pooled transparently.
+
 // Performs the POST call to cobalt endpoint and returns a typed / validated response
 export const downloadInstagramContent = async (mediaUrl: string): Promise<DownloaderResponse> => {
 	// Prefer env but default to cobalt for convenience
