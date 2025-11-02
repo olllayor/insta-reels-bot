@@ -1,6 +1,6 @@
 import { Bot } from 'grammy';
 import 'dotenv/config';
-import { isInstagramUrl } from './tools.js';
+import { isValidMediaUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
 import { saveUserAndVideo, saveOrUpdateUser, getAdminStats } from './db.js';
 
@@ -39,7 +39,9 @@ bot.command('start', async (ctx) => {
 	} catch (err) {
 		log('WARN', `Failed to save user ${ctx.from?.id}`, err);
 	}
-	await ctx.reply('Send me an Instagram Reel link (post/reel) and I will fetch the video for you.');
+	await ctx.reply(
+		'Send me a media link from any supported platform and I will fetch the video for you.\n\nSupported: Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu',
+	);
 });
 
 bot.command('admin', async (ctx) => {
@@ -109,15 +111,17 @@ bot.command('help', async (ctx) => {
 /help - Show this message
 ${isAdmin ? '/admin - View bot analytics\n/stats - View detailed statistics' : ''}
 
-Just send me an Instagram Reel link and I'll download it for you!
+Send me a media link from any supported platform and I'll download the video for you!
+
+<b>Supported Platforms:</b> Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu
 `;
 	await ctx.reply(message, { parse_mode: 'HTML' });
 });
 
 bot.on('message:text', async (ctx) => {
 	const text = ctx.message.text;
-	if (isInstagramUrl(text)) {
-		log('INFO', `Instagram URL received from user`, {
+	if (isValidMediaUrl(text)) {
+		log('INFO', `Media URL received from user`, {
 			userId: ctx.from?.id,
 			username: ctx.from?.username || 'N/A',
 			url: text,
