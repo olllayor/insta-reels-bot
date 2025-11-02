@@ -1,5 +1,5 @@
 #!/bin/sh
-set -euo pipefail
+set -euo
 
 echo "[START] Initializing Instagram Reels Bot with Cron..."
 
