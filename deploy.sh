@@ -45,7 +45,13 @@ fi
 
 # Stop and remove existing containers
 echo "[INFO] Stopping and removing existing containers..."
-docker-compose down
+docker-compose down 2>/dev/null || true
+
+# Force remove container if it still exists (from manual docker run)
+if docker ps -a --format '{{.Names}}' | grep -qx 'insta-reel-bot'; then
+  echo "[INFO] Force removing existing insta-reel-bot container..."
+  docker rm -f insta-reel-bot
+fi
 
 # Build and start container
 echo "[INFO] Building Docker image and starting container..."
