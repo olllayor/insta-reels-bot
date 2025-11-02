@@ -43,6 +43,10 @@ else
   exit 1
 fi
 
+# Stop and remove existing containers
+echo "[INFO] Stopping and removing existing containers..."
+docker-compose down
+
 # Build and start container
 echo "[INFO] Building Docker image and starting container..."
 if docker-compose up -d --build; then

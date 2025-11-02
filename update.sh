@@ -51,7 +51,16 @@ fi
 
 # Restart container (reuse existing image for speed)
 info "Restarting container with updated code..."
-docker-compose restart
+
+# Check if container exists
+if docker ps -a --format '{{.Names}}' | grep -qx 'insta-reel-bot'; then
+    # Container exists, restart it
+    docker-compose restart
+else
+    # Container doesn't exist, start it
+    info "Container not found, starting fresh..."
+    docker-compose up -d
+fi
 
 sleep 2
 
