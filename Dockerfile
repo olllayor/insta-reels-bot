@@ -48,4 +48,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 USER node
 
 # Start both bot and cron
+# Note: Docker will load .env with --env-file, which strips quotes automatically
 CMD ["./start.sh"]

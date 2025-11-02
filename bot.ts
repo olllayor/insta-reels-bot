@@ -29,23 +29,23 @@ bot.command('admin', async (ctx) => {
 
 	const stats = getAdminStats();
 	const message = `
-📊 **BOT ANALYTICS**
+📊 <b>BOT ANALYTICS</b>
 
-👥 **User Statistics**
+👥 <b>User Statistics</b>
 • Total Users: ${stats.totalUsers}
 • Today Logins: ${stats.todayLogins}
 • Weekly Logins: ${stats.weeklyLogins}
 
-🎬 **Video Statistics**
+🎬 <b>Video Statistics</b>
 • Total Videos: ${stats.totalVideos}
 • Daily Active Users: ${stats.dailyActiveUsers}
 • Weekly Active Users: ${stats.weeklyActiveUsers}
 • Avg Videos/User: ${stats.avgVideosPerUser}
 
-🏆 **Top Users**
+🏆 <b>Top Users</b>
 ${stats.topUsers.map((u, i) => `${i + 1}. ${u.username}: ${u.videoCount} videos`).join('\n') || 'No data'}
 `;
-	await ctx.reply(message, { parse_mode: 'Markdown' });
+	await ctx.reply(message, { parse_mode: 'HTML' });
 });
 
 bot.command('stats', async (ctx) => {
@@ -56,9 +56,9 @@ bot.command('stats', async (ctx) => {
 
 	const adminStats = getAdminStats();
 	const message = `
-📊 **DETAILED STATISTICS**
+📊 <b>DETAILED STATISTICS</b>
 
-🔹 **Engagement Metrics**
+🔹 <b>Engagement Metrics</b>
   Today Login Rate: ${
 		adminStats.totalUsers > 0 ? ((adminStats.todayLogins / adminStats.totalUsers) * 100).toFixed(1) : 0
 	}%
@@ -72,17 +72,17 @@ bot.command('stats', async (ctx) => {
 		adminStats.totalUsers > 0 ? ((adminStats.weeklyActiveUsers / adminStats.totalUsers) * 100).toFixed(1) : 0
 	}%)
 
-🔹 **Content**
+🔹 <b>Content</b>
   Total Videos Processed: ${adminStats.totalVideos}
   Avg Videos per User: ${adminStats.avgVideosPerUser}
 `;
-	await ctx.reply(message, { parse_mode: 'Markdown' });
+	await ctx.reply(message, { parse_mode: 'HTML' });
 });
 
 bot.command('help', async (ctx) => {
 	const isAdmin = ADMIN_ID && ctx.from?.id === ADMIN_ID;
 	const message = `
-📖 **BOT COMMANDS**
+📖 <b>BOT COMMANDS</b>
 
 /start - Get started
 /help - Show this message
@@ -90,7 +90,7 @@ ${isAdmin ? '/admin - View bot analytics\n/stats - View detailed statistics' : '
 
 Just send me an Instagram Reel link and I'll download it for you!
 `;
-	await ctx.reply(message, { parse_mode: 'Markdown' });
+	await ctx.reply(message, { parse_mode: 'HTML' });
 });
 
 bot.on('message:text', async (ctx) => {
