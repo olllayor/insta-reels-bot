@@ -448,28 +448,86 @@ bot.on('message:text', async (ctx) => {
 
 			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
 			const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
-			await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });
 
-			// Send to channel for persistence and get file_id
-			let fileId: string | undefined;
+			// Try to get file size first (HEAD request is very fast, typically 50-200ms)
+			let fileSizeMB = 0;
 			try {
-				const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, { supports_streaming: true, caption });
-				fileId = channelMsg.video?.file_id;
-			} catch (channelErr) {
-				log('WARN', `Failed to send to channel`, { error: channelErr });
+				const headResponse = await fetch(response.url, {
+					method: 'HEAD',
+					signal: AbortSignal.timeout(3000), // 3 second timeout
+				});
+				const contentLength = headResponse.headers.get('content-length');
+				if (contentLength) {
+					fileSizeMB = parseInt(contentLength) / (1024 * 1024);
+				}
+			} catch (err) {
+				// If HEAD fails or times out, we'll just try to send the video anyway
+				// and let the sendVideo fallback handle it
+				log('WARN', `Failed to check file size`, { error: err });
 			}
 
-			// Persist user and video
+			// Telegram bot API limit is 50MB for videos
+			// If file is too large, send URL instead (avoids wasting bandwidth)
+			const MAX_VIDEO_SIZE_MB = 45; // Leave some margin
+
 			try {
-				saveUserAndVideo(ctx.from!, response.url, text, fileId);
-				log('INFO', `Video successfully saved for user`, {
+				if (fileSizeMB > 0 && fileSizeMB > MAX_VIDEO_SIZE_MB) {
+					log('INFO', `Video too large (${fileSizeMB.toFixed(2)}MB), sending URL instead`, {
+						userId: ctx.from?.id,
+						url: response.url,
+					});
+					await ctx.reply(
+						`📹 Video ready!\n\n⚠️ This video is too large to upload directly (${fileSizeMB.toFixed(
+							1,
+						)}MB).\n\n🔗 Download link:\n${response.url}\n\n⏱ ${(response.elapsedMs / 1000).toFixed(
+							2,
+						)}s | @SaveReelsNowBot`,
+						{ link_preview_options: { is_disabled: false } },
+					);
+				} else {
+					// Try to send video
+					await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });
+
+					// Send to channel for persistence and get file_id
+					let fileId: string | undefined;
+					try {
+						const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, {
+							supports_streaming: true,
+							caption,
+						});
+						fileId = channelMsg.video?.file_id;
+					} catch (channelErr) {
+						log('WARN', `Failed to send to channel`, { error: channelErr });
+					}
+
+					// Persist user and video
+					try {
+						saveUserAndVideo(ctx.from!, response.url, text, fileId);
+						log('INFO', `Video successfully saved for user`, {
+							userId: ctx.from?.id,
+							username: ctx.from?.username || 'N/A',
+							responseTime: `${response.elapsedMs}ms`,
+							hasFileId: !!fileId,
+							fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
+						});
+					} catch (persistErr) {
+						log('WARN', `Failed to persist video record`, { userId: ctx.from?.id, error: persistErr });
+					}
+				}
+			} catch (sendError: any) {
+				// If sendVideo fails (e.g., file too large, network error), fallback to URL
+				log('WARN', `Failed to send video, falling back to URL`, {
 					userId: ctx.from?.id,
-					username: ctx.from?.username || 'N/A',
-					responseTime: `${response.elapsedMs}ms`,
-					hasFileId: !!fileId,
+					error: sendError?.message || String(sendError),
+					fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
 				});
-			} catch (persistErr) {
-				log('WARN', `Failed to persist video record`, { userId: ctx.from?.id, error: persistErr });
+
+				await ctx.reply(
+					`📹 Video ready!\n\n⚠️ Unable to upload video directly.\n\n🔗 Download link:\n${response.url}\n\n⏱ ${(
+						response.elapsedMs / 1000
+					).toFixed(2)}s | @SaveReelsNowBot`,
+					{ link_preview_options: { is_disabled: false } },
+				);
 			}
 		} catch (error) {
 			log('ERROR', `Download error for user`, {
