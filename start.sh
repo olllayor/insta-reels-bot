@@ -43,7 +43,7 @@ shutdown() {
   exit 0
 }
 
-trap shutdown SIGTERM SIGINT
+trap shutdown TERM INT
 
 echo "[START] Both processes running. Press Ctrl+C to stop."
 
