@@ -392,6 +392,11 @@ bot.on('message:text', async (ctx) => {
 					userMessage = '❌ This content is not available (private account or deleted post).';
 				} else if (errorMsg.includes('timeout')) {
 					userMessage = '❌ Request timed out. Please try again.';
+				} else if (errorMsg.includes('unsupported')) {
+					userMessage = "❌ Instagram is supported, but I couldn't recognize your link. Have you pasted the right one?";
+				} else if (errorMsg.includes('youtube.login')) {
+					userMessage =
+						"❌ YouTube downloading is temporarily disabled due to restrictions from YouTube's side. We're already looking for ways to go around them.";
 				}
 				log('WARN', `Download failed for user`, {
 					userId: ctx.from?.id,
@@ -401,7 +406,7 @@ bot.on('message:text', async (ctx) => {
 				return await ctx.reply(userMessage);
 			}
 			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
-			const caption = `⏱ ${response.elapsedMs} ms | @SaveReelsNowBot`;
+			const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
 			await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });
 
 			// Send to channel for persistence and get file_id
