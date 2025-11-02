@@ -1,26 +1,28 @@
 #!/bin/sh
+set -e
 echo "Starting Instagram Reels Bot with Cron..."
 
-# Start the cron job in the background
-echo "Starting cron job..."
+# Load .env if present (without exporting empty vars)
+if [ -f ".env" ]; then
+  echo "Loading .env"
+  # shellcheck disable=SC2046
+  export $(grep -v '^#' .env | xargs -I{} echo {})
+fi
+
+echo "Starting cron and bot..."
 pnpm cron &
 CRON_PID=$!
 
-# Start the bot in the foreground
-echo "Starting bot..."
 pnpm start &
 BOT_PID=$!
 
-# Function to handle shutdown
 shutdown() {
   echo "Shutting down..."
-  kill $CRON_PID $BOT_PID
-  wait $CRON_PID $BOT_PID
+  kill "$CRON_PID" "$BOT_PID" 2>/dev/null || true
+  wait "$CRON_PID" "$BOT_PID" 2>/dev/null || true
   exit 0
 }
 
-# Trap signals
 trap shutdown SIGTERM SIGINT
 
-# Wait for both processes
-wait $BOT_PID $CRON_PID
+wait "$BOT_PID" "$CRON_PID"

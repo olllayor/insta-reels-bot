@@ -4,8 +4,14 @@ import { isInstagramUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
 import { saveUserAndVideo, saveOrUpdateUser, getAdminStats } from './db.js';
 
+const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+	console.error('BOT_TOKEN is missing in environment. Exiting to avoid restart loop.');
+	process.exit(1);
+}
+
 console.log('Bot initialized.');
-const bot = new Bot(process.env.BOT_TOKEN!);
+const bot = new Bot(BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID || '0');
 
 bot.command('start', async (ctx) => {
