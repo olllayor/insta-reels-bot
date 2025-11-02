@@ -19,9 +19,11 @@ RUN corepack enable \
 # Install dependencies first (better caching)
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies and rebuild better-sqlite3 (keep it simple and pnpm-only)
-RUN pnpm install --frozen-lockfile \
-  && pnpm rebuild better-sqlite3
+# Install dependencies and rebuild better-sqlite3
+RUN pnpm install --frozen-lockfile
+
+# Rebuild better-sqlite3 explicitly (npm works better for native modules)
+RUN cd /app && npm rebuild better-sqlite3 --build-from-source
 
 # Copy the rest of the source code
 COPY . .
