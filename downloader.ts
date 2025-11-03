@@ -1,3 +1,5 @@
+import { getProxyManager } from './proxy.js';
+
 export interface DownloaderSuccessResponseMinimal {
 	success: true;
 	url: string; // direct video URL
@@ -22,19 +24,55 @@ export const downloadInstagramContent = async (mediaUrl: string): Promise<Downlo
 	const endpoint = process.env.API_ENDPOINT || 'https://cobalt.ollayor.uz/';
 	const timeoutMs = Number(process.env.DOWNLOADER_TIMEOUT_MS || 20000);
 
+	const proxyManager = getProxyManager();
+	let proxy = null;
+	let proxyUrl: string | null = null;
+
+	// Get proxy if available
+	if (proxyManager.hasProxies()) {
+		proxy = await proxyManager.getNextProxy();
+		if (proxy) {
+			proxyUrl = proxyManager.getProxyUrl(proxy);
+			console.log(`🔄 Using proxy: ${proxy.host}:${proxy.port}`);
+		}
+	}
+
 	try {
 		const started = performance.now();
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+		// Build headers with proxy information if available
+		const headers: any = {
+			'Content-Type': 'application/json',
+			Accept: 'application/json',
+		};
+
+		// If using a proxy, set it via headers/environment
+		// Note: Node.js fetch will use http_proxy/https_proxy env vars automatically
+		if (proxyUrl) {
+			// Set proxy environment variables for this request context
+			process.env.http_proxy = proxyUrl;
+			process.env.https_proxy = proxyUrl;
+		}
+
 		const result = await fetch(endpoint, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+			headers,
 			// cobalt expects { url, videoQuality? } where videoQuality only accepts "max" currently
 			body: JSON.stringify({ url: mediaUrl, videoQuality: 'max' }),
 			signal: controller.signal,
 		});
 		clearTimeout(timeout);
+
+		// Clear proxy env vars
+		delete process.env.http_proxy;
+		delete process.env.https_proxy;
+
+		// Mark proxy as successful if used
+		if (proxy) {
+			proxyManager.markSuccess(proxy);
+		}
 
 		if (!result.ok) {
 			const elapsedMs = Math.round(performance.now() - started);
@@ -75,7 +113,18 @@ export const downloadInstagramContent = async (mediaUrl: string): Promise<Downlo
 		}
 		return { success: false, error: 'Unknown API response', elapsedMs };
 	} catch (err: any) {
+		// Clear proxy env vars on error
+		delete process.env.http_proxy;
+		delete process.env.https_proxy;
+
 		const elapsedMs = 0; // unknown (failed early)
+
+		// Mark proxy as failed if used
+		if (proxy) {
+			proxyManager.markFailed(proxy);
+			console.warn(`⚠️ Proxy failed, marking as bad: ${proxy.host}:${proxy.port}`);
+		}
+
 		if (err?.name === 'AbortError') {
 			return { success: false, error: 'Request timed out', elapsedMs };
 		}

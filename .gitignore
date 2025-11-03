@@ -5,7 +5,7 @@ node_modules/
 package-lock.json
 yarn.lock
 pnpm-debug.log*
-
+proxies.json
 #############
 # Env files #
 #############

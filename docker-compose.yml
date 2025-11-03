@@ -10,6 +10,7 @@ services:
       - DB_PATH=/app/data/db.sqlite3
     volumes:
       - bot-data:/app/data
+      - ./proxies.json:/app/proxies.json:ro
     networks:
       - cobalt_cobalt
     logging:
