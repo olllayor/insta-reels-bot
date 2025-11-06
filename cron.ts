@@ -5,15 +5,6 @@ import { createReadStream } from 'fs';
 import AdmZip from 'adm-zip';
 import './db.js'; // ensure DB initialized / file created
 
-/**
- * Periodically sends the database file to the admin chat.
- * Env vars:
- *  BOT_TOKEN - Telegram bot token (required)
- *  ADMIN_CHAT_ID - Chat ID (number) to send file to (required)
- *  DB_PATH - Absolute or relative path to DB file (required)
- *  CRON_INTERVAL_HOURS - Optional override interval in hours (default 5)
- */
-
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID ? Number(process.env.ADMIN_CHAT_ID) : undefined;
 const DB_PATH_ENV = process.env.DB_PATH || './db.sqlite3';

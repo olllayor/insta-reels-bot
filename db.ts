@@ -17,12 +17,8 @@ try {
 	db = new Database(DB_PATH);
 	const database = db!; // Non-null assertion since we just assigned it
 
-	// Enable WAL mode for better concurrency under load
 	database.pragma('journal_mode = WAL');
-	// Faster writes: don't fsync after every transaction (trade-off: durability for speed)
-	// Safe for our use case (download metadata); Telegram handles actual file persistence
 	database.pragma('synchronous = NORMAL');
-	// Increase cache to reduce I/O
 	database.pragma('cache_size = -64000'); // ~64MB cache
 	database.exec(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +51,6 @@ try {
     created_at TEXT NOT NULL
   );`);
 
-	// Migration: add user_ref if missing
 	try {
 		const pragma = database.prepare('PRAGMA table_info(videos)').all() as { name: string }[];
 		const hasUserRef = pragma.some((c) => c.name === 'user_ref');
@@ -98,7 +93,6 @@ export interface SavedVideoRecord {
 
 export function saveUserAndVideo(user: TgUser, videoUrl: string, originalUrl?: string, fileId?: string) {
 	if (!db || !upsertUserStmt || !getUserIdStmt || !insertVideoStmt) {
-		// Silently skip to keep bot functional
 		return;
 	}
 	const now = new Date().toISOString();

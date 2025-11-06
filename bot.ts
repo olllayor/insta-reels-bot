@@ -466,8 +466,6 @@ bot.on('message:text', async (ctx) => {
 				log('WARN', `Failed to check file size`, { error: err });
 			}
 
-			// Telegram bot API limit is 50MB for videos
-			// If file is too large, send URL instead (avoids wasting bandwidth)
 			const MAX_VIDEO_SIZE_MB = 45; // Leave some margin
 
 			try {
