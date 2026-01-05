@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Instagram Reels Bot - Quick Update Script (using Docker Compose)
+# Instagram Reels Bot - Quick Update Script (using Docker Compose + Bun)
 # Usage: ./update.sh (pulls latest code and restarts container without rebuilding)
 # Fast deployment for code changes without Docker rebuild
 
 set -euo pipefail
 
-echo "🔄 Updating Instagram Reels Bot (No rebuild)"
-echo "============================================="
+echo "🔄 Updating Instagram Reels Bot (Bun - No rebuild)"
+echo "=================================================="
 
 # Colors for output
 RED='\033[0;31m'

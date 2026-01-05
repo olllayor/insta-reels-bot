@@ -23,13 +23,13 @@ fi
 
 # Start cron in background
 echo "[START] Starting cron job (interval: ${CRON_INTERVAL_HOURS:-5}h)..."
-pnpm cron &
+bun run cron.ts &
 CRON_PID=$!
 echo "[START] Cron PID: $CRON_PID"
 
 # Start bot in background
 echo "[START] Starting bot..."
-pnpm start &
+bun run bot.ts &
 BOT_PID=$!
 echo "[START] Bot PID: $BOT_PID"
 

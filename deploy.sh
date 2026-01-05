@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-echo "🚀 Full Deployment - Instagram Reels Bot"
-echo "=========================================="
+echo "🚀 Full Deployment - Instagram Reels Bot (Bun)"
+echo "==============================================="
 
 # Check dependencies
 if ! command -v docker-compose &> /dev/null; then

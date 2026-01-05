@@ -5,14 +5,13 @@
 	"main": "index.js",
 	"type": "module",
 	"scripts": {
-		"start": "npx tsx bot.ts",
-		"dev": "npx tsx watch bot.ts",
-		"cron": "npx tsx cron.ts"
+		"start": "bun run bot.ts",
+		"dev": "bun --watch bot.ts",
+		"cron": "bun run cron.ts"
 	},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",
-	"packageManager": "pnpm@10.13.1",
 	"devDependencies": {
 		"@types/adm-zip": "^0.5.7",
 		"@types/better-sqlite3": "^7.6.13",
