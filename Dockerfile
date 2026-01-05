@@ -1,5 +1,5 @@
-# Use a more compatible base image with Python and build tools
-FROM node:20-alpine
+# Use official Bun image with Alpine base
+FROM oven/bun:1-alpine
 
 # Install build dependencies for better-sqlite3
 RUN apk add --no-cache \
@@ -12,18 +12,11 @@ RUN apk add --no-cache \
 # Create app directory
 WORKDIR /app
 
-# Enable corepack and activate the exact pnpm version from package.json
-RUN corepack enable \
-  && corepack prepare pnpm@10.13.1 --activate
-
 # Install dependencies first (better caching)
-COPY package.json pnpm-lock.yaml ./
+COPY package.json bun.lockb ./
 
-# Install dependencies and rebuild better-sqlite3
-RUN pnpm install --frozen-lockfile
-
-# Rebuild better-sqlite3 explicitly (npm works better for native modules)
-RUN cd /app && npm rebuild better-sqlite3 --build-from-source
+# Install dependencies with Bun (automatically handles native modules)
+RUN bun install --frozen-lockfile
 
 # Copy the rest of the source code
 COPY . .
@@ -38,14 +31,14 @@ ENV NODE_ENV=production
 RUN chmod +x /app/start.sh
 
 # Change ownership of app directory to node user
-RUN chown -R node:node /app
+RUN chown -R bun:bun /app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "console.log('ok')" || exit 1
+  CMD bun --version || exit 1
 
 # Run as non-root user for safety
-USER node
+USER bun
 
 # Start both bot and cron
 # Note: Docker will load .env with --env-file, which strips quotes automatically
