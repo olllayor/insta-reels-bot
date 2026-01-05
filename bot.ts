@@ -366,6 +366,99 @@ Choose an action:
 	await ctx.answerCallbackQuery();
 });
 
+// Inline query handler for inline mode
+bot.on('inline_query', async (ctx) => {
+	const query = ctx.inlineQuery.query.trim();
+
+	if (!query) {
+		// Empty query - return empty results
+		await ctx.answerInlineQuery([]);
+		return;
+	}
+
+	if (!isValidMediaUrl(query)) {
+		// Invalid URL format - return empty results
+		await ctx.answerInlineQuery([]);
+		return;
+	}
+
+	try {
+		log('INFO', `Inline query received from user`, {
+			userId: ctx.from?.id,
+			username: ctx.from?.username || 'N/A',
+			query: query,
+		});
+
+		const response = await downloadInstagramContent(query);
+
+		if (!response.success) {
+			// On error, return empty results
+			const errorMsg = (response as any).error;
+			log('WARN', `Inline download failed`, {
+				userId: ctx.from?.id,
+				error: errorMsg,
+			});
+			await ctx.answerInlineQuery([]);
+			return;
+		}
+
+		trackMetric(response.elapsedMs);
+		logMetricsIfNeeded();
+
+		// Get file size
+		let fileSizeMB = 0;
+		try {
+			const headResponse = await fetch(query, {
+				method: 'HEAD',
+				signal: AbortSignal.timeout(3000),
+			});
+			const contentLength = headResponse.headers.get('content-length');
+			if (contentLength) {
+				fileSizeMB = parseInt(contentLength) / (1024 * 1024);
+			}
+		} catch (err) {
+			log('WARN', `Failed to check file size for inline query`, { error: err });
+		}
+
+		const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
+		const MAX_VIDEO_SIZE_MB = 45;
+
+		// Create inline result for the video
+		const inlineResult: any = {
+			type: 'video' as const,
+			id: `${Date.now()}-${ctx.from?.id}`,
+			video_url: response.url,
+			mime_type: 'video/mp4',
+			thumbnail_url: response.url,
+			title: '📹 Video',
+			description:
+				fileSizeMB > MAX_VIDEO_SIZE_MB
+					? `⚠️ Large (${fileSizeMB.toFixed(1)}MB) - use download link`
+					: `✅ Ready (${fileSizeMB > 0 ? fileSizeMB.toFixed(1) : '?'}MB)`,
+			reply_markup: {
+				inline_keyboard: [[{ text: '📥 Download', url: response.url }]],
+			},
+		};
+
+		await ctx.answerInlineQuery([inlineResult], {
+			cache_time: 0, // Don't cache results for real-time responses
+			is_personal: true, // Cache per user
+		});
+
+		log('INFO', `Inline query answered successfully`, {
+			userId: ctx.from?.id,
+			fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
+			responseTime: `${response.elapsedMs}ms`,
+		});
+	} catch (error) {
+		log('ERROR', `Inline query error`, {
+			userId: ctx.from?.id,
+			error: error,
+		});
+		await ctx.answerInlineQuery([]);
+	}
+});
+
 bot.on('message:text', async (ctx) => {
 	const text = ctx.message.text;
 
