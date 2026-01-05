@@ -13,7 +13,7 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Install dependencies first (better caching)
-COPY package.json bun.lockb ./
+COPY package.json bun.lock ./
 
 # Install dependencies with Bun (automatically handles native modules)
 RUN bun install --frozen-lockfile
