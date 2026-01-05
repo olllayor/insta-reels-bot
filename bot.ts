@@ -45,8 +45,8 @@ const trackMetric = (elapsedMs: number) => {
 	metrics.totalTime += elapsedMs;
 	metrics.minTime = Math.min(metrics.minTime, elapsedMs);
 	metrics.maxTime = Math.max(metrics.maxTime, elapsedMs);
-};
 
+};
 // Log metrics every 10 downloads
 const logMetricsIfNeeded = () => {
 	if (metrics.totalRequests > 0 && metrics.totalRequests % 10 === 0) {
@@ -371,14 +371,37 @@ bot.on('inline_query', async (ctx) => {
 	const query = ctx.inlineQuery.query.trim();
 
 	if (!query) {
-		// Empty query - return empty results
-		await ctx.answerInlineQuery([]);
+		// Empty query - provide helpful suggestion
+		const helpResult: any = {
+			type: 'article',
+			id: 'help_inline',
+			title: '🎬 Share Media with SaveReelsNowBot',
+			description: 'Paste a media URL to instantly download videos from Instagram, TikTok, YouTube, and more',
+			input_message_content: {
+				message_text: 'Send me a media link (Instagram, TikTok, YouTube, etc.) and I\'ll fetch the video for you!\n\nSupported: Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu',
+				parse_mode: 'HTML',
+			},
+			reply_markup: {
+				inline_keyboard: [[{ text: '💬 Start Chat', url: 'https://t.me/SaveReelsNowBot' }]],
+			},
+		};
+		await ctx.answerInlineQuery([helpResult], { cache_time: 3600 });
 		return;
 	}
 
 	if (!isValidMediaUrl(query)) {
-		// Invalid URL format - return empty results
-		await ctx.answerInlineQuery([]);
+		// Invalid URL format - provide helpful error message
+		const errorResult: any = {
+			type: 'article',
+			id: 'error_invalid_url',
+			title: '❌ Invalid URL',
+			description: 'Please provide a valid media URL',
+			input_message_content: {
+				message_text: '❌ This doesn\'t look like a valid media URL.\n\nPlease paste a link from: Instagram, TikTok, YouTube, Twitter/X, Facebook, Reddit, Vimeo, Twitch, or other supported platforms.',
+				parse_mode: 'HTML',
+			},
+		};
+		await ctx.answerInlineQuery([errorResult], { cache_time: 300 });
 		return;
 	}
 
@@ -392,13 +415,35 @@ bot.on('inline_query', async (ctx) => {
 		const response = await downloadInstagramContent(query);
 
 		if (!response.success) {
-			// On error, return empty results
+			// On error, provide error result with message
 			const errorMsg = (response as any).error;
+			let userFriendlyError = '❌ Download failed';
+			if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
+				userFriendlyError = '⚠️ Service temporarily unavailable. Please try again later.';
+			} else if (errorMsg.includes('not available')) {
+				userFriendlyError = '❌ Content not available (private account or deleted).';
+			} else if (errorMsg.includes('timeout')) {
+				userFriendlyError = '⏱️ Request timed out. Please try again.';
+			} else if (errorMsg.includes('unsupported')) {
+				userFriendlyError = '❌ Unsupported URL format.';
+			}
+
+			const errorResult: any = {
+				type: 'article',
+				id: `error_${Date.now()}`,
+				title: userFriendlyError,
+				description: 'Tap to see details',
+				input_message_content: {
+					message_text: userFriendlyError,
+					parse_mode: 'HTML',
+				},
+			};
+			await ctx.answerInlineQuery([errorResult], { cache_time: 60 });
+			
 			log('WARN', `Inline download failed`, {
 				userId: ctx.from?.id,
 				error: errorMsg,
 			});
-			await ctx.answerInlineQuery([]);
 			return;
 		}
 
@@ -408,7 +453,7 @@ bot.on('inline_query', async (ctx) => {
 		// Get file size
 		let fileSizeMB = 0;
 		try {
-			const headResponse = await fetch(query, {
+			const headResponse = await fetch(response.url, {
 				method: 'HEAD',
 				signal: AbortSignal.timeout(3000),
 			});
@@ -420,27 +465,54 @@ bot.on('inline_query', async (ctx) => {
 			log('WARN', `Failed to check file size for inline query`, { error: err });
 		}
 
-		const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
+		const responseTimeS = (response.elapsedMs / 1000).toFixed(2);
 		const MAX_VIDEO_SIZE_MB = 45;
+		const statusEmoji = fileSizeMB > MAX_VIDEO_SIZE_MB ? '⚠️' : '✅';
+		const sizeInfo = fileSizeMB > 0 ? `${fileSizeMB.toFixed(1)}MB` : 'calculating...';
 
-		// Create inline result for the video
-		const inlineResult: any = {
-			type: 'video' as const,
-			id: `${Date.now()}-${ctx.from?.id}`,
+		const results: any[] = [];
+
+		// Primary result: Direct video
+		const inlineVideoResult: any = {
+			type: 'video',
+			id: `video_${Date.now()}-${ctx.from?.id}`,
 			video_url: response.url,
 			mime_type: 'video/mp4',
 			thumbnail_url: response.url,
-			title: '📹 Video',
-			description:
-				fileSizeMB > MAX_VIDEO_SIZE_MB
-					? `⚠️ Large (${fileSizeMB.toFixed(1)}MB) - use download link`
-					: `✅ Ready (${fileSizeMB > 0 ? fileSizeMB.toFixed(1) : '?'}MB)`,
+			title: '📹 Direct Upload',
+			description: `${statusEmoji} ${sizeInfo} • ⏱ ${responseTimeS}s`,
+			caption: `✅ Ready to share | ⏱ ${responseTimeS}s | @SaveReelsNowBot`,
 			reply_markup: {
-				inline_keyboard: [[{ text: '📥 Download', url: response.url }]],
+				inline_keyboard: [
+					[
+						{ text: '📥 Download Link', url: response.url },
+						{ text: '🔗 Share', switch_inline_query_current_chat: query },
+					],
+				],
 			},
 		};
+		results.push(inlineVideoResult);
 
-		await ctx.answerInlineQuery([inlineResult], {
+		// Secondary result: Download link article (fallback for large files)
+		if (fileSizeMB > MAX_VIDEO_SIZE_MB) {
+			const downloadResult: any = {
+				type: 'article',
+				id: `download_${Date.now()}-${ctx.from?.id}`,
+				title: '📥 Download Link',
+				description: `File is large (${fileSizeMB.toFixed(1)}MB) - download directly`,
+				input_message_content: {
+					message_text: `📹 Video Ready!\n\n⚠️ Large file (${fileSizeMB.toFixed(1)}MB)\n\n🔗 <a href="${response.url}">Download Video</a>\n\n⏱ ${responseTimeS}s | @SaveReelsNowBot`,
+					parse_mode: 'HTML',
+				},
+				thumbnail_url: response.url,
+				reply_markup: {
+					inline_keyboard: [[{ text: '📥 Download', url: response.url }]],
+				},
+			};
+			results.push(downloadResult);
+		}
+
+		await ctx.answerInlineQuery(results, {
 			cache_time: 0, // Don't cache results for real-time responses
 			is_personal: true, // Cache per user
 		});
@@ -449,13 +521,26 @@ bot.on('inline_query', async (ctx) => {
 			userId: ctx.from?.id,
 			fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
 			responseTime: `${response.elapsedMs}ms`,
+			resultsCount: results.length,
 		});
 	} catch (error) {
 		log('ERROR', `Inline query error`, {
 			userId: ctx.from?.id,
 			error: error,
 		});
-		await ctx.answerInlineQuery([]);
+		
+		// Provide user-friendly error even on unexpected errors
+		const fallbackResult: any = {
+			type: 'article',
+			id: `error_fallback_${Date.now()}`,
+			title: '❌ Something went wrong',
+			description: 'Please try again or contact support',
+			input_message_content: {
+				message_text: '❌ An error occurred while processing your request.\n\nPlease try again or send the link directly to the bot.',
+				parse_mode: 'HTML',
+			},
+		};
+		await ctx.answerInlineQuery([fallbackResult], { cache_time: 60 });
 	}
 });
 
@@ -509,30 +594,40 @@ bot.on('message:text', async (ctx) => {
 		});
 
 		try {
-			await ctx.reply('🔄 Fetching media...');
+			const processingMsg = await ctx.reply('⏳ <b>Processing your media...</b>', { parse_mode: 'HTML' });
 			const response = await downloadInstagramContent(text);
+			
 			if (!response.success) {
 				// Type narrowing: response is now DownloaderErrorResponseMinimal
 				const errorMsg: string = (response as any).error;
-				let userMessage = `❌ Download failed: ${errorMsg}`;
+				let userMessage = `❌ <b>Download failed</b>\n\n${errorMsg}`;
 				if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
-					userMessage = '❌ Instagram is currently blocking requests. Please try again later or with a different reel.';
+					userMessage = '⚠️ <b>Service temporarily unavailable</b>\n\nPlease try again later or with a different video.';
 				} else if (errorMsg.includes('not available')) {
-					userMessage = '❌ This content is not available (private account or deleted post).';
+					userMessage = '❌ <b>Content not available</b>\n\nThis video might be from a private account or has been deleted.';
 				} else if (errorMsg.includes('timeout')) {
-					userMessage = '❌ Request timed out. Please try again.';
+					userMessage = '⏱️ <b>Request timed out</b>\n\nPlease try again.';
 				} else if (errorMsg.includes('unsupported')) {
-					userMessage = "❌ Instagram is supported, but I couldn't recognize your link. Have you pasted the right one?";
+					userMessage = "❌ <b>Unsupported URL</b>\n\nI couldn't recognize your link. Please make sure you pasted the correct URL.";
 				} else if (errorMsg.includes('youtube.login')) {
-					userMessage =
-						"❌ YouTube downloading is temporarily disabled due to restrictions from YouTube's side. We're already looking for ways to go around them.";
+					userMessage = "⚠️ <b>YouTube temporarily unavailable</b>\n\nYouTube downloading is currently disabled. We're working on a fix!";
 				}
+				
 				log('WARN', `Download failed for user`, {
 					userId: ctx.from?.id,
 					username: ctx.from?.username,
 					error: errorMsg,
 				});
-				return await ctx.reply(userMessage);
+				
+				await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, userMessage, {
+					parse_mode: 'HTML',
+					reply_markup: {
+						inline_keyboard: [
+							[{ text: '🔄 Try another link', switch_inline_query: '' }],
+						],
+					},
+				});
+				return;
 			}
 
 			// Track metrics for performance monitoring
@@ -540,7 +635,7 @@ bot.on('message:text', async (ctx) => {
 			logMetricsIfNeeded();
 
 			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
-			const caption = `⏱ ${(response.elapsedMs / 1000).toFixed(2)}s | @SaveReelsNowBot`;
+			const responseTimeS = (response.elapsedMs / 1000).toFixed(2);
 
 			// Try to get file size first (HEAD request is very fast, typically 50-200ms)
 			let fileSizeMB = 0;
@@ -555,11 +650,12 @@ bot.on('message:text', async (ctx) => {
 				}
 			} catch (err) {
 				// If HEAD fails or times out, we'll just try to send the video anyway
-				// and let the sendVideo fallback handle it
 				log('WARN', `Failed to check file size`, { error: err });
 			}
 
 			const MAX_VIDEO_SIZE_MB = 45; // Leave some margin
+			const statusEmoji = fileSizeMB > MAX_VIDEO_SIZE_MB ? '⚠️' : '✅';
+			const sizeInfo = fileSizeMB > 0 ? `${fileSizeMB.toFixed(1)}MB` : 'calculating...';
 
 			try {
 				if (fileSizeMB > 0 && fileSizeMB > MAX_VIDEO_SIZE_MB) {
@@ -567,17 +663,49 @@ bot.on('message:text', async (ctx) => {
 						userId: ctx.from?.id,
 						url: response.url,
 					});
-					await ctx.reply(
-						`📹 Video ready!\n\n⚠️ This video is too large to upload directly (${fileSizeMB.toFixed(
-							1,
-						)}MB).\n\n🔗 Download link:\n${response.url}\n\n⏱ ${(response.elapsedMs / 1000).toFixed(
-							2,
-						)}s | @SaveReelsNowBot`,
-						{ link_preview_options: { is_disabled: false } },
-					);
+					
+					const message = `📹 <b>Video ready!</b>\n\n${statusEmoji} <b>File size:</b> ${sizeInfo}\n⏱ <b>Speed:</b> ${responseTimeS}s\n\n⚠️ This video is too large to upload directly.\n\n<b>Options:</b>`;
+					
+					await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
+						parse_mode: 'HTML',
+						reply_markup: {
+							inline_keyboard: [
+								[
+									{ text: '📥 Download Link', url: response.url },
+									{ text: '💾 Save to Downloads', url: response.url },
+								],
+							],
+						},
+						link_preview_options: { is_disabled: false },
+					});
 				} else {
-					// Try to send video
-					await ctx.api.sendVideo(ctx.chat.id, response.url, { supports_streaming: true, caption });
+					// Try to send video with updated message
+					await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, 
+						`📹 <b>Uploading video...</b>\n${statusEmoji} ${sizeInfo} • ⏱ ${responseTimeS}s`, 
+						{ parse_mode: 'HTML' }
+					);
+					
+					const caption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | @SaveReelsNowBot`;
+					await ctx.api.sendVideo(ctx.chat.id, response.url, { 
+						supports_streaming: true, 
+						caption,
+						parse_mode: 'HTML',
+						reply_markup: {
+							inline_keyboard: [
+								[
+									{ text: '🔗 Share Link', url: response.url },
+									{ text: '📤 Share to Story', switch_inline_query: '' },
+								],
+							],
+						}
+					});
+
+					// Delete the processing message
+					try {
+						await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id);
+					} catch (deleteErr) {
+						log('WARN', `Failed to delete processing message`, { error: deleteErr });
+					}
 
 					// Send to channel for persistence and get file_id
 					let fileId: string | undefined;
@@ -585,6 +713,7 @@ bot.on('message:text', async (ctx) => {
 						const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, {
 							supports_streaming: true,
 							caption,
+							parse_mode: 'HTML',
 						});
 						fileId = channelMsg.video?.file_id;
 					} catch (channelErr) {
@@ -613,12 +742,20 @@ bot.on('message:text', async (ctx) => {
 					fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
 				});
 
-				await ctx.reply(
-					`📹 Video ready!\n\n⚠️ Unable to upload video directly.\n\n🔗 Download link:\n${response.url}\n\n⏱ ${(
-						response.elapsedMs / 1000
-					).toFixed(2)}s | @SaveReelsNowBot`,
-					{ link_preview_options: { is_disabled: false } },
-				);
+				const message = `📹 <b>Video ready!</b>\n\n${statusEmoji} <b>File size:</b> ${sizeInfo}\n⏱ <b>Speed:</b> ${responseTimeS}s\n\n⚠️ Unable to upload directly.\n\n<b>Options:</b>`;
+
+				await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
+					parse_mode: 'HTML',
+					reply_markup: {
+						inline_keyboard: [
+							[
+								{ text: '📥 Download Link', url: response.url },
+								{ text: '💾 Save to Downloads', url: response.url },
+							],
+						],
+					},
+					link_preview_options: { is_disabled: false },
+				});
 			}
 		} catch (error) {
 			log('ERROR', `Download error for user`, {
@@ -626,7 +763,7 @@ bot.on('message:text', async (ctx) => {
 				username: ctx.from?.username || 'N/A',
 				error: error,
 			});
-			await ctx.reply('❌ Failed to process the URL. Please try again.');
+			await ctx.reply('❌ <b>Something went wrong</b>\n\nPlease try again or contact support.', { parse_mode: 'HTML' });
 		}
 	}
 });
