@@ -718,11 +718,14 @@ bot.on('message:text', async (ctx) => {
 					// Send to channel for persistence and get file_id
 					let fileId: string | undefined;
 					try {
-						const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, {
-							supports_streaming: true,
-							caption,
-							parse_mode: 'HTML',
-						});
+					// Create caption with username for group
+					const username = ctx.from?.username ? `@${ctx.from.username}` : ctx.from?.first_name || 'Unknown';
+					const groupCaption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | Shared by ${username}`;
+					const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, {
+						supports_streaming: true,
+						caption: groupCaption,
+						parse_mode: 'HTML',
+					});
 						fileId = channelMsg.video?.file_id;
 					} catch (channelErr) {
 						log('WARN', `Failed to send to channel`, { error: channelErr });
