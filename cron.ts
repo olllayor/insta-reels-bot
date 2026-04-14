@@ -3,7 +3,6 @@ import 'dotenv/config';
 import { stat, writeFile, readFile } from 'fs/promises';
 import { createReadStream } from 'fs';
 import AdmZip from 'adm-zip';
-import './db.js'; // ensure DB initialized / file created
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID ? Number(process.env.ADMIN_CHAT_ID) : undefined;

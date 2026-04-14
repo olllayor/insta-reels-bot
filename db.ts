@@ -7,16 +7,55 @@ const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
 
 const DB_PATH = process.env.DB_PATH || './db.sqlite3';
+const DB_INIT_RETRIES = Math.max(1, Number(process.env.DB_INIT_RETRIES || 8));
+const DB_INIT_RETRY_DELAY_MS = Math.max(50, Number(process.env.DB_INIT_RETRY_DELAY_MS || 250));
 
 let db: DatabaseType | null = null;
 let upsertUserStmt: StatementType | null = null;
 let getUserIdStmt: StatementType | null = null;
 let insertVideoStmt: StatementType | null = null;
 
+const isBusyDatabaseError = (err: unknown) => {
+	const maybeErr = err as { code?: string; message?: string } | undefined;
+	const code = maybeErr?.code || '';
+	const message = String(maybeErr?.message || '').toLowerCase();
+	return code.startsWith('SQLITE_BUSY') || message.includes('database is locked') || message.includes('sqlite_busy');
+};
+
+const sleepSync = (ms: number) => {
+	const lock = new Int32Array(new SharedArrayBuffer(4));
+	Atomics.wait(lock, 0, 0, ms);
+};
+
 try {
-	db = new Database(DB_PATH);
+	let initAttempt = 0;
+	let initialized = false;
+	let lastError: unknown;
+
+	while (!initialized && initAttempt < DB_INIT_RETRIES) {
+		initAttempt++;
+		try {
+			db = new Database(DB_PATH, { timeout: 5000 });
+			initialized = true;
+		} catch (openErr) {
+			lastError = openErr;
+			if (!isBusyDatabaseError(openErr) || initAttempt >= DB_INIT_RETRIES) {
+				throw openErr;
+			}
+			console.warn(
+				`[DB] Open attempt ${initAttempt}/${DB_INIT_RETRIES} failed due to lock, retrying in ${DB_INIT_RETRY_DELAY_MS}ms...`,
+			);
+			sleepSync(DB_INIT_RETRY_DELAY_MS);
+		}
+	}
+
+	if (!db) {
+		throw lastError || new Error('Database initialization failed with unknown error');
+	}
+
 	const database = db!; // Non-null assertion since we just assigned it
 
+	database.pragma('busy_timeout = 5000');
 	database.pragma('journal_mode = WAL');
 	database.pragma('synchronous = NORMAL');
 	database.pragma('cache_size = -64000'); // ~64MB cache
