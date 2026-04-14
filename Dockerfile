@@ -1,14 +1,6 @@
 # Use official Bun image with Alpine base
 FROM oven/bun:1-alpine
 
-# Install build dependencies for better-sqlite3
-RUN apk add --no-cache \
-  python3 \
-  make \
-  g++ \
-  sqlite \
-  sqlite-dev
-
 # Create app directory
 WORKDIR /app
 

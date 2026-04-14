@@ -1,6 +1,6 @@
-import { Database } from 'bun:sqlite';
 import 'dotenv/config';
 import type { User as TgUser } from 'grammy/types';
+import { Database } from 'bun:sqlite';
 
 const DB_PATH = process.env.DB_PATH || './db.sqlite3';
 const DB_INIT_RETRIES = Math.max(1, Number(process.env.DB_INIT_RETRIES || 8));
@@ -28,7 +28,7 @@ try {
 	while (!initialized && initAttempt < DB_INIT_RETRIES) {
 		initAttempt++;
 		try {
-			db = new Database(DB_PATH, { timeout: 5000 });
+			db = new Database(DB_PATH, { create: true });
 			initialized = true;
 		} catch (openErr) {
 			lastError = openErr;
@@ -48,11 +48,12 @@ try {
 
 	const database = db!; // Non-null assertion since we just assigned it
 
-	database.pragma('busy_timeout = 5000');
-	database.pragma('journal_mode = WAL');
-	database.pragma('synchronous = NORMAL');
-	database.pragma('cache_size = -64000'); // ~64MB cache
-	database.exec(`CREATE TABLE IF NOT EXISTS users (    id INTEGER PRIMARY KEY AUTOINCREMENT,
+	database.run('PRAGMA busy_timeout = 5000');
+	database.run('PRAGMA journal_mode = WAL');
+	database.run('PRAGMA synchronous = NORMAL');
+	database.run('PRAGMA cache_size = -64000'); // ~64MB cache
+	database.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id INTEGER UNIQUE NOT NULL,
     username TEXT,
     full_name TEXT,
@@ -61,7 +62,7 @@ try {
     last_seen TEXT NOT NULL
   )`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS videos (
+	database.run(`CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     user_ref TEXT, -- denormalized username or telegram id
@@ -72,7 +73,7 @@ try {
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
 
-	db.exec(`CREATE TABLE IF NOT EXISTS broadcasts (
+	database.run(`CREATE TABLE IF NOT EXISTS broadcasts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     admin_id INTEGER NOT NULL,
     message TEXT NOT NULL,
@@ -83,14 +84,14 @@ try {
   )`);
 
 	try {
-		const pragma = db.query('PRAGMA table_info(videos)').all() as { name: string }[];
+		const pragma = database.query('PRAGMA table_info(videos)').all() as { name: string }[];
 		const hasUserRef = pragma.some((c) => c.name === 'user_ref');
 		if (!hasUserRef) {
-			db.exec('ALTER TABLE videos ADD COLUMN user_ref TEXT');
+			database.run('ALTER TABLE videos ADD COLUMN user_ref TEXT;');
 		}
 		const hasFileId = pragma.some((c) => c.name === 'file_id');
 		if (!hasFileId) {
-			db.exec('ALTER TABLE videos ADD COLUMN file_id TEXT');
+			database.run('ALTER TABLE videos ADD COLUMN file_id TEXT;');
 		}
 	} catch (e) {
 		console.warn('Could not ensure user_ref or file_id column:', e);
@@ -117,58 +118,35 @@ export function saveUserAndVideo(user: TgUser, videoUrl: string, originalUrl?: s
 	const now = new Date().toISOString();
 	const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
 	const userRef = user.username || String(user.id);
-	
-	const upsertUserStmt = db.query(`INSERT INTO users (telegram_id, username, full_name, phone, first_seen, last_seen)
-  VALUES ($telegram_id, $username, $full_name, $phone, $now, $now)
+	const upsertUserStmt = db.prepare(`INSERT INTO users (telegram_id, username, full_name, phone, first_seen, last_seen)
+  VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT(telegram_id) DO UPDATE SET
     username=excluded.username,
     full_name=excluded.full_name,
     last_seen=excluded.last_seen`);
-	
-	upsertUserStmt.run({
-		$telegram_id: user.id,
-		$username: user.username || null,
-		$full_name: fullName || null,
-		$phone: null,
-		$now: now,
-	});
-	
-	const getUserIdStmt = db.query('SELECT id FROM users WHERE telegram_id = $telegram_id');
-	const row = getUserIdStmt.get({ $telegram_id: user.id }) as { id: number } | undefined;
+	upsertUserStmt.run(user.id, user.username || null, fullName || null, null, now, now);
+
+	const getUserIdStmt = db.prepare('SELECT id FROM users WHERE telegram_id = ?');
+	const row = getUserIdStmt.get(user.id) as { id: number } | undefined;
 	if (!row) throw new Error('Failed to retrieve user id after upsert');
-	
-	const insertVideoStmt = db.query(
-		`INSERT INTO videos (user_id, user_ref, url, original_url, file_id, created_at) VALUES ($user_id, $user_ref, $url, $original_url, $file_id, $created_at)`
+
+	const insertVideoStmt = db.prepare(
+		`INSERT INTO videos (user_id, user_ref, url, original_url, file_id, created_at) VALUES (?, ?, ?, ?, ?, ?);`,
 	);
-	insertVideoStmt.run({
-		$user_id: row.id,
-		$user_ref: userRef,
-		$url: videoUrl,
-		$original_url: originalUrl || null,
-		$file_id: fileId || null,
-		$created_at: now,
-	});
+	insertVideoStmt.run(row.id, userRef, videoUrl, originalUrl || null, fileId || null, now);
 }
 
 export function saveOrUpdateUser(user: TgUser) {
 	if (!db) return;
 	const now = new Date().toISOString();
 	const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ').trim();
-	
-	const upsertUserStmt = db.query(`INSERT INTO users (telegram_id, username, full_name, phone, first_seen, last_seen)
-  VALUES ($telegram_id, $username, $full_name, $phone, $now, $now)
+	const upsertUserStmt = db.prepare(`INSERT INTO users (telegram_id, username, full_name, phone, first_seen, last_seen)
+  VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT(telegram_id) DO UPDATE SET
     username=excluded.username,
     full_name=excluded.full_name,
     last_seen=excluded.last_seen`);
-	
-	upsertUserStmt.run({
-		$telegram_id: user.id,
-		$username: user.username || null,
-		$full_name: fullName || null,
-		$phone: null,
-		$now: now,
-	});
+	upsertUserStmt.run(user.id, user.username || null, fullName || null, null, now, now);
 }
 
 export function stats() {
