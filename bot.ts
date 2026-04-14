@@ -1,5 +1,8 @@
-import { Bot } from 'grammy';
+import { Bot, InputFile } from 'grammy';
 import 'dotenv/config';
+import { mkdtemp, open, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { isValidMediaUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
 import {
@@ -45,6 +48,137 @@ const trackMetric = (elapsedMs: number) => {
 	metrics.totalTime += elapsedMs;
 	metrics.minTime = Math.min(metrics.minTime, elapsedMs);
 	metrics.maxTime = Math.max(metrics.maxTime, elapsedMs);
+};
+
+const MAX_DIRECT_VIDEO_SIZE_MB = 45;
+const MAX_DOCUMENT_UPLOAD_SIZE_MB = 50;
+const MAX_DOCUMENT_UPLOAD_BYTES = MAX_DOCUMENT_UPLOAD_SIZE_MB * 1024 * 1024;
+const DOCUMENT_DOWNLOAD_TIMEOUT_MS = Number(process.env.DOCUMENT_DOWNLOAD_TIMEOUT_MS || 45000);
+const ARCHIVE_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '@reels_db';
+
+type UploadStage = 'direct_video' | 'document_retry' | 'link_only';
+
+interface DeliveryResult {
+	stage: UploadStage;
+	fileId?: string;
+}
+
+interface DownloadedTempFile {
+	path: string;
+	dir: string;
+	fileName: string;
+	sizeBytes: number;
+}
+
+const buildLinkOptionsKeyboard = (downloadUrl: string, originalUrl: string) => ({
+	inline_keyboard: [
+		[
+			{ text: '📥 Open Download Link', url: downloadUrl },
+			{ text: '🔗 Open Original Post', url: originalUrl },
+		],
+	],
+});
+
+const createLinkOnlyMessage = ({
+	statusEmoji,
+	sizeInfo,
+	responseTimeS,
+	reason,
+}: {
+	statusEmoji: string;
+	sizeInfo: string;
+	responseTimeS: string;
+	reason: string;
+}) =>
+	`📹 <b>Video ready!</b>\n\n${statusEmoji} <b>File size:</b> ${sizeInfo}\n⏱ <b>Speed:</b> ${responseTimeS}s\n\n⚠️ ${reason}\n\n<b>Options:</b>`;
+
+const inferFileName = (downloadUrl: string): string => {
+	try {
+		const pathname = new URL(downloadUrl).pathname;
+		const rawName = pathname.split('/').pop() || 'video.mp4';
+		const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
+		if (!safeName) return 'video.mp4';
+		if (safeName.includes('.')) return safeName;
+		return `${safeName}.mp4`;
+	} catch {
+		return 'video.mp4';
+	}
+};
+
+const downloadMediaToTempFile = async (
+	downloadUrl: string,
+	maxBytes: number,
+	timeoutMs: number,
+): Promise<DownloadedTempFile> => {
+	const tempDir = await mkdtemp(join(tmpdir(), 'reel-bot-'));
+	const fileName = inferFileName(downloadUrl);
+	const filePath = join(tempDir, fileName);
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+	let fileHandle: Awaited<ReturnType<typeof open>> | undefined;
+
+	try {
+		const response = await fetch(downloadUrl, { signal: controller.signal });
+		if (!response.ok) {
+			throw new Error(`Download request failed: HTTP ${response.status}`);
+		}
+
+		const contentLength = response.headers.get('content-length');
+		if (contentLength) {
+			const expectedBytes = Number.parseInt(contentLength, 10);
+			if (Number.isFinite(expectedBytes) && expectedBytes > maxBytes) {
+				throw new Error(`File exceeds ${MAX_DOCUMENT_UPLOAD_SIZE_MB}MB limit`);
+			}
+		}
+
+		if (!response.body) {
+			throw new Error('Download response has no body');
+		}
+
+		fileHandle = await open(filePath, 'w');
+		const reader = response.body.getReader();
+		let sizeBytes = 0;
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value) continue;
+			sizeBytes += value.byteLength;
+			if (sizeBytes > maxBytes) {
+				throw new Error(`File exceeds ${MAX_DOCUMENT_UPLOAD_SIZE_MB}MB limit`);
+			}
+			await fileHandle.write(value);
+		}
+
+		await fileHandle.close();
+		fileHandle = undefined;
+
+		return {
+			path: filePath,
+			dir: tempDir,
+			fileName,
+			sizeBytes,
+		};
+	} catch (err: any) {
+		if (fileHandle) {
+			await fileHandle.close().catch(() => undefined);
+		}
+
+		await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+
+		if (err?.name === 'AbortError') {
+			throw new Error(`Download timed out after ${Math.round(timeoutMs / 1000)}s`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timeout);
+	}
+};
+
+const cleanupTempDownload = async (downloaded?: DownloadedTempFile) => {
+	if (!downloaded) return;
+	await rm(downloaded.dir, { recursive: true, force: true }).catch(() => undefined);
 };
 // Log metrics every 10 downloads
 const logMetricsIfNeeded = () => {
@@ -640,7 +774,6 @@ bot.on('message:text', async (ctx) => {
 			trackMetric(response.elapsedMs);
 			logMetricsIfNeeded();
 
-			await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
 			const responseTimeS = (response.elapsedMs / 1000).toFixed(2);
 
 			// Try to get file size first (HEAD request is very fast, typically 50-200ms)
@@ -659,33 +792,39 @@ bot.on('message:text', async (ctx) => {
 				log('WARN', `Failed to check file size`, { error: err });
 			}
 
-			const MAX_VIDEO_SIZE_MB = 45; // Leave some margin
-			const statusEmoji = fileSizeMB > MAX_VIDEO_SIZE_MB ? '⚠️' : '✅';
+			const statusEmoji = fileSizeMB > MAX_DIRECT_VIDEO_SIZE_MB ? '⚠️' : '✅';
 			const sizeInfo = fileSizeMB > 0 ? `${fileSizeMB.toFixed(1)}MB` : 'calculating...';
+			const caption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | @SaveReelsNowBot`;
+			const linkOptionsKeyboard = buildLinkOptionsKeyboard(response.url, text);
+			const shouldSkipAllUploads = fileSizeMB > 0 && fileSizeMB > MAX_DOCUMENT_UPLOAD_SIZE_MB;
+			const shouldTryDirectVideo = !(fileSizeMB > 0 && fileSizeMB > MAX_DIRECT_VIDEO_SIZE_MB);
 
-			try {
-				if (fileSizeMB > 0 && fileSizeMB > MAX_VIDEO_SIZE_MB) {
-					log('INFO', `Video too large (${fileSizeMB.toFixed(2)}MB), sending URL instead`, {
-						userId: ctx.from?.id,
-						url: response.url,
-					});
+			if (shouldSkipAllUploads) {
+				log('INFO', '[link_only] Skipping upload, file exceeds configured upload cap', {
+					userId: ctx.from?.id,
+					fileSizeMB: fileSizeMB.toFixed(2),
+					errorSource: 'size.guard',
+				});
+				const message = createLinkOnlyMessage({
+					statusEmoji,
+					sizeInfo,
+					responseTimeS,
+					reason: `This video is larger than ${MAX_DOCUMENT_UPLOAD_SIZE_MB}MB and cannot be uploaded by Telegram.`,
+				});
+				await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
+					parse_mode: 'HTML',
+					reply_markup: linkOptionsKeyboard,
+					link_preview_options: { is_disabled: false },
+				});
+				return;
+			}
 
-					const message = `📹 <b>Video ready!</b>\n\n${statusEmoji} <b>File size:</b> ${sizeInfo}\n⏱ <b>Speed:</b> ${responseTimeS}s\n\n⚠️ This video is too large to upload directly.\n\n<b>Options:</b>`;
+			let deliveryResult: DeliveryResult = { stage: 'link_only' };
+			let directUploadError: unknown;
 
-					await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
-						parse_mode: 'HTML',
-						reply_markup: {
-							inline_keyboard: [
-								[
-									{ text: '📥 Download Link', url: response.url },
-									{ text: '💾 Save to Downloads', url: response.url },
-								],
-							],
-						},
-						link_preview_options: { is_disabled: false },
-					});
-				} else {
-					// Try to send video with updated message
+			if (shouldTryDirectVideo) {
+				try {
+					await ctx.api.sendChatAction(ctx.chat.id, 'upload_video');
 					await ctx.api.editMessageText(
 						processingMsg.chat.id,
 						processingMsg.message_id,
@@ -693,8 +832,7 @@ bot.on('message:text', async (ctx) => {
 						{ parse_mode: 'HTML' },
 					);
 
-					const caption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | @SaveReelsNowBot`;
-					await ctx.api.sendVideo(ctx.chat.id, response.url, {
+					const sentVideo = await ctx.api.sendVideo(ctx.chat.id, response.url, {
 						supports_streaming: true,
 						caption,
 						parse_mode: 'HTML',
@@ -707,73 +845,162 @@ bot.on('message:text', async (ctx) => {
 							],
 						},
 					});
+					deliveryResult = { stage: 'direct_video', fileId: sentVideo.video?.file_id };
 
-					// Delete the processing message
 					try {
 						await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id);
 					} catch (deleteErr) {
-						log('WARN', `Failed to delete processing message`, { error: deleteErr });
+						log('WARN', '[direct_video] Failed to delete processing message', {
+							userId: ctx.from?.id,
+							errorSource: 'telegram.deleteMessage',
+							error: deleteErr,
+						});
 					}
+				} catch (sendError: any) {
+					directUploadError = sendError;
+					log('WARN', '[direct_video] Failed to upload, trying document fallback', {
+						userId: ctx.from?.id,
+						fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
+						errorSource: 'telegram.sendVideo',
+						error: sendError?.message || String(sendError),
+					});
+				}
+			} else {
+				log('INFO', '[direct_video] Skipped direct upload because file is above direct threshold', {
+					userId: ctx.from?.id,
+					fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
+				});
+			}
 
-					// Send to channel for persistence and get file_id
-					let fileId: string | undefined;
-					try {
-						const channelMsg = await ctx.api.sendVideo('@reels_db', response.url, {
+			if (deliveryResult.stage !== 'direct_video') {
+				let downloadedFile: DownloadedTempFile | undefined;
+				try {
+					await ctx.api.sendChatAction(ctx.chat.id, 'upload_document');
+					await ctx.api.editMessageText(
+						processingMsg.chat.id,
+						processingMsg.message_id,
+						`⬇️ <b>Preparing downloadable file...</b>\n${statusEmoji} ${sizeInfo} • ⏱ ${responseTimeS}s`,
+						{ parse_mode: 'HTML' },
+					);
+
+					downloadedFile = await downloadMediaToTempFile(
+						response.url,
+						MAX_DOCUMENT_UPLOAD_BYTES,
+						DOCUMENT_DOWNLOAD_TIMEOUT_MS,
+					);
+					const sentDocument = await ctx.api.sendDocument(
+						ctx.chat.id,
+						new InputFile(downloadedFile.path, downloadedFile.fileName),
+						{
+							caption: `✅ <b>Ready as downloadable file!</b> ⏱ ${responseTimeS}s | @SaveReelsNowBot`,
+							parse_mode: 'HTML',
+						},
+					);
+					deliveryResult = { stage: 'document_retry', fileId: sentDocument.document?.file_id };
+
+					const message = createLinkOnlyMessage({
+						statusEmoji,
+						sizeInfo,
+						responseTimeS,
+						reason: 'Uploaded as a downloadable file.',
+					});
+					await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
+						parse_mode: 'HTML',
+						reply_markup: linkOptionsKeyboard,
+						link_preview_options: { is_disabled: false },
+					});
+				} catch (documentError: any) {
+					log('WARN', '[document_retry] Upload failed, using link-only fallback', {
+						userId: ctx.from?.id,
+						errorSource: 'document_retry',
+						directError: directUploadError ? String(directUploadError) : 'none',
+						error: documentError?.message || String(documentError),
+					});
+					const message = createLinkOnlyMessage({
+						statusEmoji,
+						sizeInfo,
+						responseTimeS,
+						reason: 'Unable to upload directly.',
+					});
+					await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
+						parse_mode: 'HTML',
+						reply_markup: linkOptionsKeyboard,
+						link_preview_options: { is_disabled: false },
+					});
+					return;
+				} finally {
+					await cleanupTempDownload(downloadedFile);
+				}
+			}
+
+			let archivedFileId = deliveryResult.fileId;
+			try {
+				if (deliveryResult.stage === 'document_retry') {
+					if (deliveryResult.fileId) {
+						const channelMsg = await ctx.api.sendDocument(ARCHIVE_CHANNEL_ID, deliveryResult.fileId, {
+							caption,
+							parse_mode: 'HTML',
+						});
+						archivedFileId = channelMsg.document?.file_id || archivedFileId;
+					} else {
+						const channelMsg = await ctx.api.sendDocument(ARCHIVE_CHANNEL_ID, response.url, {
+							caption,
+							parse_mode: 'HTML',
+						});
+						archivedFileId = channelMsg.document?.file_id;
+					}
+				} else {
+					if (deliveryResult.fileId) {
+						const channelMsg = await ctx.api.sendVideo(ARCHIVE_CHANNEL_ID, deliveryResult.fileId, {
 							supports_streaming: true,
 							caption,
 							parse_mode: 'HTML',
 						});
-						fileId = channelMsg.video?.file_id;
-					} catch (channelErr) {
-						log('WARN', `Failed to send to channel`, { error: channelErr });
-					}
-
-					// Persist user and video
-					try {
-						saveUserAndVideo(ctx.from!, response.url, text, fileId);
-						log('INFO', `Video successfully saved for user`, {
-							userId: ctx.from?.id,
-							username: ctx.from?.username || 'N/A',
-							responseTime: `${response.elapsedMs}ms`,
-							hasFileId: !!fileId,
-							fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
+						archivedFileId = channelMsg.video?.file_id || archivedFileId;
+					} else {
+						const channelMsg = await ctx.api.sendVideo(ARCHIVE_CHANNEL_ID, response.url, {
+							supports_streaming: true,
+							caption,
+							parse_mode: 'HTML',
 						});
-					} catch (persistErr) {
-						log('WARN', `Failed to persist video record`, { userId: ctx.from?.id, error: persistErr });
+						archivedFileId = channelMsg.video?.file_id;
 					}
 				}
-			} catch (sendError: any) {
-				// If sendVideo fails (e.g., file too large, network error), fallback to URL
-				log('WARN', `Failed to send video, falling back to URL`, {
+			} catch (channelErr) {
+				log('WARN', `[${deliveryResult.stage}] Failed to send to archive channel`, {
 					userId: ctx.from?.id,
-					error: sendError?.message || String(sendError),
+					errorSource: 'telegram.archive',
+					error: channelErr,
+				});
+			}
+
+			try {
+				saveUserAndVideo(ctx.from!, response.url, text, archivedFileId || deliveryResult.fileId);
+				log('INFO', `[${deliveryResult.stage}] Video successfully saved for user`, {
+					userId: ctx.from?.id,
+					username: ctx.from?.username || 'N/A',
+					responseTime: `${response.elapsedMs}ms`,
+					hasFileId: !!(archivedFileId || deliveryResult.fileId),
 					fileSizeMB: fileSizeMB > 0 ? fileSizeMB.toFixed(2) : 'unknown',
 				});
-
-				const message = `📹 <b>Video ready!</b>\n\n${statusEmoji} <b>File size:</b> ${sizeInfo}\n⏱ <b>Speed:</b> ${responseTimeS}s\n\n⚠️ Unable to upload directly.\n\n<b>Options:</b>`;
-
-				await ctx.api.editMessageText(processingMsg.chat.id, processingMsg.message_id, message, {
-					parse_mode: 'HTML',
-					reply_markup: {
-						inline_keyboard: [
-							[
-								{ text: '📥 Download Link', url: response.url },
-								{ text: '💾 Save to Downloads', url: response.url },
-							],
-						],
-					},
-					link_preview_options: { is_disabled: false },
+			} catch (persistErr) {
+				log('WARN', `[${deliveryResult.stage}] Failed to persist video record`, {
+					userId: ctx.from?.id,
+					errorSource: 'db.saveUserAndVideo',
+					error: persistErr,
 				});
 			}
 		} catch (error) {
-			log('ERROR', `Download error for user`, {
-				userId: ctx.from?.id,
-				username: ctx.from?.username || 'N/A',
-				error: error,
-			});
-			await ctx.reply('❌ <b>Something went wrong</b>\n\nPlease try again or contact support.', { parse_mode: 'HTML' });
+				log('ERROR', `Download error for user`, {
+					userId: ctx.from?.id,
+					username: ctx.from?.username || 'N/A',
+					error: error,
+				});
+				await ctx.reply('❌ <b>Something went wrong</b>\n\nPlease try again or contact support.', {
+					parse_mode: 'HTML',
+				});
+			}
 		}
-	}
 });
 
 bot.start();
