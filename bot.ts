@@ -1,4 +1,4 @@
-import { Bot, InputFile } from 'grammy';
+import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
 import 'dotenv/config';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -196,6 +196,49 @@ if (!BOT_TOKEN) {
 	console.error('BOT_TOKEN is missing in environment. Exiting to avoid restart loop.');
 	process.exit(1);
 }
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isNetworkResetError = (error: unknown): boolean => {
+	if (!(error instanceof HttpError)) return false;
+
+	const maybeErr = error as any;
+	const nested = maybeErr?.error || maybeErr?.cause;
+	const code = nested?.code;
+	const message = String(nested?.message || maybeErr?.message || '');
+
+	return (
+		code === 'ECONNRESET' ||
+		code === 'ETIMEDOUT' ||
+		code === 'EAI_AGAIN' ||
+		message.includes('socket connection was closed unexpectedly')
+	);
+};
+
+const withTelegramNetworkRetry = async <T>(operation: () => Promise<T>, operationName: string): Promise<T> => {
+	let attempt = 0;
+	const maxRetries = 2;
+
+	while (true) {
+		try {
+			return await operation();
+		} catch (error) {
+			if (!isNetworkResetError(error) || attempt >= maxRetries) {
+				throw error;
+			}
+
+			attempt++;
+			const backoffMs = 400 * attempt;
+			log('WARN', `[retry] Telegram call failed, retrying`, {
+				operationName,
+				attempt,
+				maxRetries,
+				error,
+			});
+			await delay(backoffMs);
+		}
+	}
+};
 
 log('INFO', 'Bot initialized.');
 const bot = new Bot(BOT_TOKEN);
@@ -996,11 +1039,52 @@ bot.on('message:text', async (ctx) => {
 					username: ctx.from?.username || 'N/A',
 					error: error,
 				});
-				await ctx.reply('❌ <b>Something went wrong</b>\n\nPlease try again or contact support.', {
-					parse_mode: 'HTML',
-				});
+				try {
+					await withTelegramNetworkRetry(
+						() =>
+							ctx.reply('❌ <b>Something went wrong</b>\n\nPlease try again or contact support.', {
+								parse_mode: 'HTML',
+							}),
+						'message:text:reply_error_fallback',
+					);
+				} catch (replyErr) {
+					log('WARN', 'Failed to send fallback error message to user', {
+						userId: ctx.from?.id,
+						error: replyErr,
+					});
+				}
 			}
 		}
+});
+
+bot.catch((err) => {
+	const ctx = err.ctx;
+
+	if (err.error instanceof GrammyError) {
+		log('ERROR', 'Telegram API returned an application error', {
+			updateId: ctx.update.update_id,
+			userId: ctx.from?.id,
+			description: err.error.description,
+			code: err.error.error_code,
+		});
+		return;
+	}
+
+	if (err.error instanceof HttpError) {
+		const level: 'WARN' | 'ERROR' = isNetworkResetError(err.error) ? 'WARN' : 'ERROR';
+		log(level, 'Telegram HTTP/network error while processing update', {
+			updateId: ctx.update.update_id,
+			userId: ctx.from?.id,
+			error: err.error,
+		});
+		return;
+	}
+
+	log('ERROR', 'Unhandled bot error', {
+		updateId: ctx.update.update_id,
+		userId: ctx.from?.id,
+		error: err.error,
+	});
 });
 
 bot.start();

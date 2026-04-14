@@ -17,6 +17,7 @@ export type DownloaderResponse = DownloaderSuccessResponseMinimal | DownloaderEr
 export const downloadInstagramContent = async (mediaUrl: string): Promise<DownloaderResponse> => {
 	const endpoint = process.env.API_ENDPOINT || 'https://cobalt.ollayor.uz/';
 	const timeoutMs = Number(process.env.DOWNLOADER_TIMEOUT_MS || 20000);
+	const started = performance.now();
 
 	const proxyManager = getProxyManager();
 	let proxy = null;
@@ -31,7 +32,6 @@ export const downloadInstagramContent = async (mediaUrl: string): Promise<Downlo
 	}
 
 	try {
-		const started = performance.now();
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -40,21 +40,24 @@ export const downloadInstagramContent = async (mediaUrl: string): Promise<Downlo
 			Accept: 'application/json',
 		};
 
-		if (proxyUrl) {
-			process.env.http_proxy = proxyUrl;
-			process.env.https_proxy = proxyUrl;
-		}
-
-		const result = await fetch(endpoint, {
+		const requestInit: RequestInit & { proxy?: string } = {
 			method: 'POST',
 			headers,
 			body: JSON.stringify({ url: mediaUrl, videoQuality: 'max' }),
 			signal: controller.signal,
-		});
-		clearTimeout(timeout);
+		};
 
-		delete process.env.http_proxy;
-		delete process.env.https_proxy;
+		if (proxyUrl) {
+			// Avoid mutating process-wide proxy env vars, which can break concurrent Telegram API calls.
+			requestInit.proxy = proxyUrl;
+		}
+
+		let result: Response;
+		try {
+			result = await fetch(endpoint, requestInit as RequestInit);
+		} finally {
+			clearTimeout(timeout);
+		}
 
 		if (proxy) {
 			proxyManager.markSuccess(proxy);
@@ -95,10 +98,7 @@ export const downloadInstagramContent = async (mediaUrl: string): Promise<Downlo
 		}
 		return { success: false, error: 'Unknown API response', elapsedMs };
 	} catch (err: any) {
-		delete process.env.http_proxy;
-		delete process.env.https_proxy;
-
-		const elapsedMs = 0; // unknown (failed early)
+		const elapsedMs = Math.round(performance.now() - started);
 
 		if (proxy) {
 			proxyManager.markFailed(proxy);
