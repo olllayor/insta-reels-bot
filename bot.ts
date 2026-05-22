@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isValidMediaUrl } from './tools.js';
 import { downloadInstagramContent } from './downloader.js';
+import { squircleCrop } from './squircle.js';
 import {
 	saveUserAndVideo,
 	saveOrUpdateUser,
@@ -259,7 +260,7 @@ bot.command('start', async (ctx) => {
 		log('WARN', `Failed to save user ${ctx.from?.id}`, err);
 	}
 	await ctx.reply(
-		'Send me a media link from any supported platform and I will fetch the video for you.\n\nSupported: Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu',
+		'Send me a media link to download the video, or send me a photo to crop it into a squircle (iOS-style rounded square)!\n\nSupported platforms: Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu',
 	);
 });
 
@@ -381,7 +382,7 @@ ${
 		: ''
 }
 
-Send me a media link from any supported platform and I'll download the video for you!
+Send me a media link from any supported platform and I'll download the video for you!\n\nYou can also send me a photo and I'll crop it into a squircle (iOS-style rounded square with black corners).
 
 <b>Supported Platforms:</b> Instagram, TikTok, Twitter/X, YouTube, Facebook, Reddit, Vimeo, Twitch, Snapchat, SoundCloud, Pinterest, Streamable, Dailymotion, Bilibili, Bluesky, Loom, OK, Newgrounds, Rutube, Tumblr, VK, Xiaohongshu
 `;
@@ -722,6 +723,77 @@ bot.on('inline_query', async (ctx) => {
 			},
 		};
 		await ctx.answerInlineQuery([fallbackResult], { cache_time: 60 });
+	}
+});
+
+bot.on('message:photo', async (ctx) => {
+	if (ctx.from) {
+		saveOrUpdateUser(ctx.from);
+	}
+
+	const photos = ctx.message.photo;
+	const largestPhoto = photos[photos.length - 1];
+
+	if (!largestPhoto) {
+		await ctx.reply('❌ Could not process this image. Please try again.');
+		return;
+	}
+
+	const processingMsg = await ctx.reply('⏳ <b>Processing your image...</b>', { parse_mode: 'HTML' });
+
+	try {
+		await ctx.api.sendChatAction(ctx.chat.id, 'upload_photo');
+
+		const file = await ctx.api.getFile(largestPhoto.file_id);
+		if (!file.file_path) {
+			await ctx.api.editMessageText(
+				processingMsg.chat.id,
+				processingMsg.message_id,
+				'❌ Could not download this image. The file may be too large.',
+			);
+			return;
+		}
+
+		const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+		const response = await fetch(fileUrl);
+		if (!response.ok) {
+			await ctx.api.editMessageText(
+				processingMsg.chat.id,
+				processingMsg.message_id,
+				'❌ Failed to download image. Please try again.',
+			);
+			return;
+		}
+
+		const imageBuffer = Buffer.from(await response.arrayBuffer());
+
+		const resultBuffer = await squircleCrop(imageBuffer);
+
+		await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id).catch(() => undefined);
+		await ctx.replyWithPhoto(new InputFile(resultBuffer, 'squircle.png'), {
+			caption: '✅ Squircle crop applied! | @SaveReelsNowBot',
+		});
+
+		log('INFO', `Squircle photo processed for user`, {
+			userId: ctx.from?.id,
+			username: ctx.from?.username || 'N/A',
+			originalSize: `${largestPhoto.width}x${largestPhoto.height}`,
+		});
+	} catch (error) {
+		log('ERROR', `Squircle processing failed`, {
+			userId: ctx.from?.id,
+			error,
+		});
+		try {
+			await ctx.api.editMessageText(
+				processingMsg.chat.id,
+				processingMsg.message_id,
+				'❌ <b>Failed to process image</b>\n\nPlease try again with a different photo.',
+				{ parse_mode: 'HTML' },
+			);
+		} catch {
+			await ctx.reply('❌ Failed to process image. Please try again.');
+		}
 	}
 });
 
