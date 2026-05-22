@@ -735,17 +735,36 @@ bot.on('message:photo', async (ctx) => {
 	const largestPhoto = photos[photos.length - 1];
 
 	if (!largestPhoto) {
+		log('WARN', 'Photo handler: no photo found in message', { userId: ctx.from?.id });
 		await ctx.reply('❌ Could not process this image. Please try again.');
 		return;
 	}
+
+	log('INFO', 'Photo handler: received photo', {
+		userId: ctx.from?.id,
+		fileId: largestPhoto.file_id,
+		width: largestPhoto.width,
+		height: largestPhoto.height,
+		fileSize: largestPhoto.file_size,
+	});
 
 	const processingMsg = await ctx.reply('⏳ <b>Processing your image...</b>', { parse_mode: 'HTML' });
 
 	try {
 		await ctx.api.sendChatAction(ctx.chat.id, 'upload_photo');
 
+		log('INFO', 'Photo handler: fetching file info from Telegram', {
+			fileId: largestPhoto.file_id,
+		});
 		const file = await ctx.api.getFile(largestPhoto.file_id);
+		log('INFO', 'Photo handler: got file info', {
+			fileId: file.file_id,
+			filePath: file.file_path,
+			fileSize: file.file_size,
+		});
+
 		if (!file.file_path) {
+			log('WARN', 'Photo handler: no file_path returned from Telegram');
 			await ctx.api.editMessageText(
 				processingMsg.chat.id,
 				processingMsg.message_id,
@@ -755,8 +774,14 @@ bot.on('message:photo', async (ctx) => {
 		}
 
 		const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+		log('INFO', 'Photo handler: downloading image', { fileUrl });
+
 		const response = await fetch(fileUrl);
 		if (!response.ok) {
+			log('ERROR', 'Photo handler: failed to download image', {
+				status: response.status,
+				statusText: response.statusText,
+			});
 			await ctx.api.editMessageText(
 				processingMsg.chat.id,
 				processingMsg.message_id,
@@ -765,9 +790,20 @@ bot.on('message:photo', async (ctx) => {
 			return;
 		}
 
-		const imageBuffer = Buffer.from(await response.arrayBuffer());
+		const arrayBuffer = await response.arrayBuffer();
+		log('INFO', 'Photo handler: image downloaded', {
+			bytes: arrayBuffer.byteLength,
+		});
+
+		const imageBuffer = Buffer.from(arrayBuffer);
+		log('INFO', 'Photo handler: calling squircleCrop', {
+			bufferSize: imageBuffer.length,
+		});
 
 		const resultBuffer = await squircleCrop(imageBuffer);
+		log('INFO', 'Photo handler: squircleCrop succeeded', {
+			resultSize: resultBuffer.length,
+		});
 
 		await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id).catch(() => undefined);
 		await ctx.replyWithPhoto(new InputFile(resultBuffer, 'squircle.png'), {
@@ -779,9 +815,12 @@ bot.on('message:photo', async (ctx) => {
 			username: ctx.from?.username || 'N/A',
 			originalSize: `${largestPhoto.width}x${largestPhoto.height}`,
 		});
-	} catch (error) {
+	} catch (error: any) {
 		log('ERROR', `Squircle processing failed`, {
 			userId: ctx.from?.id,
+			errorName: error?.name,
+			errorMessage: error?.message,
+			errorStack: error?.stack,
 			error,
 		});
 		try {
