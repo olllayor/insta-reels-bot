@@ -4,6 +4,9 @@ FROM oven/bun:1-alpine
 # Create app directory
 WORKDIR /app
 
+# Install ffmpeg for video processing
+RUN apk add --no-cache ffmpeg
+
 # Install dependencies first (better caching)
 COPY package.json bun.lock ./
 

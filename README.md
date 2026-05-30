@@ -6,6 +6,7 @@ Telegram bot that takes an Instagram Reel link and replies with the video file (
 
 - Instagram Reels downloader (video only)
 - Sends back the video file directly
+- Squircle crop for photos and videos (requires ffmpeg)
 - Basic Instagram URL validation
 
 ## Future features
@@ -30,7 +31,7 @@ CRON_INTERVAL_HOURS=5
 
 ## Run
 
-Install deps and start the bot:
+Install ffmpeg (required for video squircle) and start the bot:
 
 ```bash
 pnpm install

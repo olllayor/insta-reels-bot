@@ -1,26 +1,27 @@
 {
-	// Visit https://aka.ms/tsconfig to read more about this file
-	"compilerOptions": {
-		// TypeScript-only project - no JS emission (using tsx for runtime)
-		"noEmit": true,
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    // TypeScript-only project - no JS emission (using tsx for runtime)
+    "noEmit": true,
 
-		// Environment Settings
-		"module": "nodenext",
-		"target": "esnext",
-		"types": ["node"],
+    // Environment Settings
+    "module": "nodenext",
+    "target": "esnext",
+    "types": ["node"],
 
-		// Module Interoperability
-		"esModuleInterop": true,
-		"allowSyntheticDefaultImports": true,
+    // Module Interoperability
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
 
-		// Stricter Typechecking
-		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"exactOptionalPropertyTypes": true,
+    // Stricter Typechecking
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
 
-		// Module Detection
-		"isolatedModules": true,
-		"moduleDetection": "force",
-		"skipLibCheck": true
-	}
+    // Module Detection
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+  },
 }
