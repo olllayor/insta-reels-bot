@@ -34,8 +34,8 @@ CRON_INTERVAL_HOURS=5
 Install ffmpeg (required for video squircle) and start the bot:
 
 ```bash
-pnpm install
-pnpm start
+bun install
+bun run start
 ```
 
 Send a Reel URL to your bot in Telegram to receive the video.
@@ -47,7 +47,7 @@ A lightweight worker `cron.ts` can periodically send your database file to the a
 Start it (alongside the main bot):
 
 ```bash
-pnpm run cron
+bun run cron
 ```
 
 It sends immediately on start, then on the configured interval. Set `CRON_INTERVAL_HOURS` to change cadence. The backup is sent as a zipped `.zip` file (falls back to raw DB if compression fails).
