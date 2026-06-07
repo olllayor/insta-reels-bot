@@ -34,16 +34,36 @@ BOT_PID=$!
 echo "[START] Bot PID: $BOT_PID"
 
 # Handle shutdown gracefully
+SHUTDRAIN_TIMEOUT_SEC=${SHUTDRAIN_TIMEOUT_SEC:-35}
 shutdown() {
-  echo "[SHUTDOWN] Received signal, shutting down..."
-  kill "$CRON_PID" 2>/dev/null || true
-  kill "$BOT_PID" 2>/dev/null || true
-  wait "$CRON_PID" "$BOT_PID" 2>/dev/null || true
+  echo "[SHUTDOWN] Received signal, shutting down (drain timeout=${SHUTDRAIN_TIMEOUT_SEC}s)..."
+
+  # Ask the bot to drain in-flight updates first.
+  kill -TERM "$BOT_PID" 2>/dev/null || true
+  kill -TERM "$CRON_PID" 2>/dev/null || true
+
+  # Wait for the bot to exit on its own (it does an internal drain via SIGTERM).
+  wait "$BOT_PID" 2>/dev/null
+  BOT_EXIT=$?
+  BOT_WAITED=$((SECONDS - SHUTDOWN_START))
+
+  # Force-kill cron if it didn't exit in time.
+  if kill -0 "$CRON_PID" 2>/dev/null; then
+    wait "$CRON_PID" 2>/dev/null
+  fi
+
+  if [ "$BOT_EXIT" -ne 0 ] && [ "$BOT_WAITED" -ge "$SHUTDRAIN_TIMEOUT_SEC" ]; then
+    echo "[SHUTDOWN] Drain timeout exceeded; force-killing bot"
+    kill -KILL "$BOT_PID" 2>/dev/null || true
+  fi
+
   echo "[SHUTDOWN] Done."
   exit 0
 }
 
-trap shutdown TERM INT
+# Capture shutdown start time so the trap can compute elapsed drain time.
+SHUTDOWN_START=$SECONDS
+trap 'SHUTDOWN_START=$SECONDS; shutdown' TERM INT
 
 echo "[START] Both processes running. Press Ctrl+C to stop."
 

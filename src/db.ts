@@ -83,15 +83,6 @@ try {
     created_at TEXT NOT NULL
   )`);
 
-	database.run(`CREATE TABLE IF NOT EXISTS rate_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    event_type TEXT NOT NULL,
-    ts INTEGER NOT NULL
-  )`);
-	database.run(`CREATE INDEX IF NOT EXISTS idx_rate_events_user_ts ON rate_events (user_id, event_type, ts)`);
-	database.run(`CREATE INDEX IF NOT EXISTS idx_rate_events_ts ON rate_events (ts)`);
-
 	try {
 		const pragma = database.query('PRAGMA table_info(videos)').all() as { name: string }[];
 		const hasUserRef = pragma.some((c) => c.name === 'user_ref');
@@ -340,13 +331,3 @@ export function getBroadcastStats(): BroadcastStats {
 }
 
 export { db, DB_PATH };
-
-export const closeDb = () => {
-	if (!db) return;
-	try {
-		db.close();
-	} catch (e) {
-		console.warn('[DB] close failed:', e);
-	}
-	db = null;
-};

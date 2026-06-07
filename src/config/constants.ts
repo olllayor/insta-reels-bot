@@ -1,0 +1,11 @@
+export const MAX_DIRECT_VIDEO_SIZE_MB = 45;
+export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 50;
+export const MAX_DOCUMENT_UPLOAD_BYTES = MAX_DOCUMENT_UPLOAD_SIZE_MB * 1024 * 1024;
+export const DOCUMENT_DOWNLOAD_TIMEOUT_MS = Number(process.env.DOCUMENT_DOWNLOAD_TIMEOUT_MS || 45000);
+export const ARCHIVE_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '@reels_db';
+export const QUALITY_FALLBACK_THRESHOLD_MB = Number(process.env.QUALITY_FALLBACK_THRESHOLD_MB || 45);
+export const API_ENDPOINT = process.env.API_ENDPOINT || 'https://cobalt.tools/api/json';
+export const DOWNLOADER_TIMEOUT_MS = Number(process.env.DOWNLOADER_TIMEOUT_MS || 20000);
+export const ADMIN_ID = parseInt(process.env.ADMIN_ID || '0');
+export const BOT_TOKEN = process.env.BOT_TOKEN;
+export const HEAD_REQUEST_TIMEOUT_MS = 3000;

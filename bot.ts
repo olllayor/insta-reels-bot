@@ -1,10 +1,10 @@
-import { Bot, GrammyError, HttpError, InputFile } from 'grammy';
+import { Bot, GrammyError, HttpError, InputFile, Context, NextFunction } from 'grammy';
 import 'dotenv/config';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isValidMediaUrl } from './tools.js';
-import { downloadInstagramContent } from './downloader.js';
+import { downloadInstagramContent, isCircuitOpenError } from './downloader.js';
 import { squircleCrop } from './squircle.js';
 import { squircleCropVideo } from './squircle-video.ts';
 import {
@@ -14,7 +14,11 @@ import {
   getAllUserIds,
   saveBroadcast,
   getBroadcastStats,
+  closeDb,
 } from './db.js';
+import { checkRateLimit, type RateBucket } from './rateLimit.ts';
+import { getCobaltCircuitBreaker } from './circuitBreaker.ts';
+import { getProxyManager } from './proxy.ts';
 
 // Simple logger with timestamp
 const log = (level: 'INFO' | 'WARN' | 'ERROR', message: string, data?: any) => {
@@ -80,6 +84,24 @@ const buildLinkOptionsKeyboard = (downloadUrl: string, originalUrl: string) => (
     ],
   ],
 });
+
+const formatRateLimitMessage = (retryAfterMs: number, limit: number): string => {
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return `⏱ <b>Slow down</b>\n\nYou've hit the rate limit (${limit}/min). Please try again in ${seconds}s.`;
+};
+
+const formatCircuitOpenMessage = (retryAfterSeconds: number): string =>
+  `⚠️ <b>Service temporarily unavailable</b>\n\nThe download service is recovering from errors. Please try again in ~${retryAfterSeconds}s.`;
+
+const isAdminUser = (userId: number | undefined): boolean => Boolean(ADMIN_ID && userId === ADMIN_ID);
+
+const tryConsumeRateLimit = (userId: number | undefined, bucket: RateBucket): { allowed: true } | { allowed: false; retryAfterMs: number; limit: number } => {
+  if (isAdminUser(userId)) return { allowed: true };
+  if (!userId) return { allowed: true };
+  const result = checkRateLimit(userId, bucket);
+  if (result.allowed) return { allowed: true };
+  return { allowed: false, retryAfterMs: result.retryAfterMs, limit: result.limit };
+};
 
 const createLinkOnlyMessage = ({
   statusEmoji,
@@ -246,6 +268,138 @@ log('INFO', 'Bot initialized.');
 const bot = new Bot(BOT_TOKEN);
 const ADMIN_ID = parseInt(process.env.ADMIN_ID || '0');
 
+// ---------------------------------------------------------------------------
+// Lifecycle: in-flight tracking, health checker, graceful shutdown
+// ---------------------------------------------------------------------------
+
+const inFlight = new Set<Promise<unknown>>();
+
+const trackInFlight = async (ctx: Context, next: NextFunction): Promise<void> => {
+	const p = (async () => {
+		try {
+			await next();
+		} catch (err) {
+			// Re-throw so grammy sees it; tracker just owns the promise lifecycle.
+			throw err;
+		}
+	})();
+	inFlight.add(p);
+	try {
+		await p;
+	} finally {
+		inFlight.delete(p);
+	}
+};
+
+bot.use(trackInFlight);
+
+// Install proxy health checker (no-op if no proxies, or if proxy usage is not opted in).
+let stopHealthChecker: (() => void) | null = null;
+const useProxies = process.env.USE_PROXIES === 'true' || process.env.USE_PROXIES === '1';
+try {
+	const pm = getProxyManager();
+	if (pm.hasProxies() && useProxies) {
+		stopHealthChecker = pm.startHealthChecker();
+		log('INFO', 'Proxy health checker started (USE_PROXIES=true)');
+	} else if (pm.hasProxies() && !useProxies) {
+		log('INFO', 'Proxies loaded but USE_PROXIES is not set; health checker disabled');
+	} else {
+		log('INFO', 'No proxies configured; health checker disabled');
+	}
+} catch (e) {
+	log('WARN', 'Failed to start proxy health checker', e);
+}
+
+// Wire breaker state change logging (visibility into the new reliability layer).
+try {
+	getCobaltCircuitBreaker().onStateChange((state) => {
+		log('WARN', `[breaker] cobalt-api transitioned to ${state}`);
+	});
+} catch (e) {
+	log('WARN', 'Failed to subscribe to breaker state changes', e);
+}
+
+const SHUTDOWN_TIMEOUT_MS = Math.max(1_000, Number(process.env.SHUTDRAIN_TIMEOUT_MS || 30_000));
+let shutdownStarted = false;
+let shutdownResolve: (() => void) | null = null;
+const shutdownComplete = new Promise<void>((resolve) => {
+	shutdownResolve = resolve;
+});
+
+const inFlightCount = (): number => inFlight.size;
+
+const waitForInFlight = async (timeoutMs: number): Promise<boolean> => {
+	const started = Date.now();
+	while (inFlightCount() > 0 && Date.now() - started < timeoutMs) {
+		await new Promise((r) => setTimeout(r, 100));
+	}
+	return inFlightCount() === 0;
+};
+
+const performShutdown = async (signal: string): Promise<void> => {
+	if (shutdownStarted) return;
+	shutdownStarted = true;
+	const log_ = (level: 'INFO' | 'WARN' | 'ERROR', message: string, data?: unknown) =>
+		log(level, message, data);
+
+	log_('INFO', `[shutdown] received ${signal}; stopping bot, draining in-flight updates (timeout=${SHUTDOWN_TIMEOUT_MS}ms)`);
+
+	// 1. Stop accepting new updates.
+	try {
+		await bot.stop();
+	} catch (e) {
+		log_('WARN', '[shutdown] bot.stop() threw', e);
+	}
+
+	// 2. Drain in-flight handlers up to the timeout.
+	const drained = await waitForInFlight(SHUTDOWN_TIMEOUT_MS);
+	if (!drained) {
+		log_('WARN', `[shutdown] drain timeout reached; ${inFlightCount()} update(s) still in-flight`);
+	} else {
+		log_('INFO', '[shutdown] all in-flight updates drained');
+	}
+
+	// 3. Stop proxy health checker.
+	if (stopHealthChecker) {
+		try {
+			stopHealthChecker();
+		} catch (e) {
+			log_('WARN', '[shutdown] health checker stop threw', e);
+		}
+	}
+
+	// 4. Close the DB.
+	try {
+		closeDb();
+	} catch (e) {
+		log_('WARN', '[shutdown] closeDb() threw', e);
+	}
+
+	log_('INFO', '[shutdown] complete');
+	shutdownResolve?.();
+};
+
+const installSignalHandlers = () => {
+	const handler = (signal: NodeJS.Signals) => {
+		// Don't await — signal handlers must be sync. performShutdown runs in background.
+		performShutdown(signal)
+			.catch((e) => log('ERROR', '[shutdown] unhandled error', e))
+			.finally(() => {
+				// If the runtime is still alive after the graceful path, force exit.
+				// Using setImmediate so we don't reenter the signal handler.
+				setImmediate(() => process.exit(0));
+			});
+	};
+	process.once('SIGTERM', handler);
+	process.once('SIGINT', handler);
+};
+
+installSignalHandlers();
+
+// Export for tests / external scripts that want to trigger clean shutdown programmatically.
+export const shutdownBot = performShutdown;
+export const getInFlightCount = inFlightCount;
+
 bot.command('start', async (ctx) => {
   try {
     if (ctx.from) {
@@ -287,6 +441,9 @@ Choose an action:
         [
           { text: '📢 Broadcast', callback_data: 'admin_broadcast' },
           { text: '📡 Broadcast Stats', callback_data: 'admin_broadcast_stats' },
+        ],
+        [
+          { text: '🛡 Reliability', callback_data: 'admin_reliability' },
         ],
       ],
     },
@@ -536,6 +693,69 @@ Choose an action:
             { text: '📢 Broadcast', callback_data: 'admin_broadcast' },
             { text: '📡 Broadcast Stats', callback_data: 'admin_broadcast_stats' },
           ],
+          [
+            { text: '🛡 Reliability', callback_data: 'admin_reliability' },
+          ],
+        ],
+      },
+    });
+  } else if (data === 'admin_reliability') {
+    const breaker = getCobaltCircuitBreaker().getStats();
+    const stateEmoji = breaker.state === 'CLOSED' ? '🟢' : breaker.state === 'HALF_OPEN' ? '🟡' : '🔴';
+    const proxySnapshot = (() => {
+      try {
+        return getProxyManager().getHealthSnapshot();
+      } catch {
+        return [];
+      }
+    })();
+
+    const stateBuckets: Record<string, number> = { healthy: 0, degraded: 0, unhealthy: 0, unknown: 0 };
+    for (const entry of proxySnapshot) {
+      stateBuckets[entry.health.state] = (stateBuckets[entry.health.state] || 0) + 1;
+    }
+
+    const topProxies = [...proxySnapshot]
+      .filter((p) => p.health.latencyMs !== Infinity && p.health.latencyMs > 0)
+      .sort((a, b) => a.health.latencyMs - b.health.latencyMs)
+      .slice(0, 5)
+      .map((p, i) => `${i + 1}. ${p.proxy}: ${p.health.latencyMs}ms (${p.health.state})`)
+      .join('\n') || 'No latency data yet';
+
+    const lastTripStr = breaker.lastTripAt
+      ? new Date(breaker.lastTripAt).toLocaleString()
+      : 'never';
+
+    const message = `
+🛡 <b>RELIABILITY</b>
+
+🔌 <b>Circuit Breaker (cobalt-api)</b>
+${stateEmoji} State: <b>${breaker.state}</b>
+  Consecutive failures: ${breaker.consecutiveFailures}
+  Total trips: ${breaker.totalTrips}
+  Last trip: ${lastTripStr}
+
+🌐 <b>Proxy Health (${proxySnapshot.length} total)</b>
+  Healthy: ${stateBuckets.healthy}
+  Degraded: ${stateBuckets.degraded}
+  Unhealthy: ${stateBuckets.unhealthy}
+  Unknown: ${stateBuckets.unknown}
+
+⚡ <b>Fastest Proxies</b>
+${topProxies}
+
+📊 <b>In-flight</b>: ${inFlightCount()} update(s)
+`;
+
+    await ctx.editMessageText(message, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📊 Analytics', callback_data: 'admin_analytics' },
+            { text: '🔄 Refresh', callback_data: 'admin_reliability' },
+          ],
+          [{ text: '« Back', callback_data: 'admin_back' }],
         ],
       },
     });
@@ -546,6 +766,23 @@ Choose an action:
 
 // Inline query handler for inline mode
 bot.on('inline_query', async (ctx) => {
+  const rl = tryConsumeRateLimit(ctx.from?.id, 'inline');
+  if (!rl.allowed) {
+    const seconds = Math.max(1, Math.ceil(rl.retryAfterMs / 1000));
+    const errorResult: any = {
+      type: 'article',
+      id: `rate_limited_${Date.now()}`,
+      title: '⏱ Slow down',
+      description: `Rate limit reached (${rl.limit}/min). Try again in ${seconds}s.`,
+      input_message_content: {
+        message_text: `⏱ You've hit the rate limit (${rl.limit}/min). Please try again in ${seconds}s.`,
+        parse_mode: 'HTML',
+      },
+    };
+    await ctx.answerInlineQuery([errorResult], { cache_time: 30, is_personal: true });
+    return;
+  }
+
   const query = ctx.inlineQuery.query.trim();
 
   if (!query) {
@@ -598,7 +835,10 @@ bot.on('inline_query', async (ctx) => {
       // On error, provide error result with message
       const errorMsg = (response as any).error;
       let userFriendlyError = '❌ Download failed';
-      if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
+      if (isCircuitOpenError(errorMsg)) {
+        const seconds = Number(errorMsg.split(':').pop() || '30');
+        userFriendlyError = `⚠️ Service temporarily unavailable. Retry in ~${Number.isFinite(seconds) ? seconds : 30}s.`;
+      } else if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
         userFriendlyError = '⚠️ Service temporarily unavailable. Please try again later.';
       } else if (errorMsg.includes('not available')) {
         userFriendlyError = '❌ Content not available (private account or deleted).';
@@ -732,6 +972,12 @@ bot.on('message:photo', async (ctx) => {
     saveOrUpdateUser(ctx.from);
   }
 
+  const rl = tryConsumeRateLimit(ctx.from?.id, 'photo');
+  if (!rl.allowed) {
+    await ctx.reply(formatRateLimitMessage(rl.retryAfterMs, rl.limit), { parse_mode: 'HTML' });
+    return;
+  }
+
   const photos = ctx.message.photo;
   const largestPhoto = photos[photos.length - 1];
 
@@ -840,6 +1086,12 @@ bot.on('message:photo', async (ctx) => {
 bot.on('message:video', async (ctx) => {
   if (ctx.from) {
     saveOrUpdateUser(ctx.from);
+  }
+
+  const rl = tryConsumeRateLimit(ctx.from?.id, 'video');
+  if (!rl.allowed) {
+    await ctx.reply(formatRateLimitMessage(rl.retryAfterMs, rl.limit), { parse_mode: 'HTML' });
+    return;
   }
 
   const video = ctx.message.video;
@@ -990,6 +1242,12 @@ bot.on('message:text', async (ctx) => {
   }
 
   if (isValidMediaUrl(text)) {
+    const rl = tryConsumeRateLimit(ctx.from?.id, 'download');
+    if (!rl.allowed) {
+      await ctx.reply(formatRateLimitMessage(rl.retryAfterMs, rl.limit), { parse_mode: 'HTML' });
+      return;
+    }
+
     log('INFO', `Media URL received from user`, {
       userId: ctx.from?.id,
       username: ctx.from?.username || 'N/A',
@@ -1004,7 +1262,10 @@ bot.on('message:text', async (ctx) => {
         // Type narrowing: response is now DownloaderErrorResponseMinimal
         const errorMsg: string = (response as any).error;
         let userMessage = `❌ <b>Download failed</b>\n\n${errorMsg}`;
-        if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
+        if (isCircuitOpenError(errorMsg)) {
+          const seconds = Number(errorMsg.split(':').pop() || '30');
+          userMessage = formatCircuitOpenMessage(Number.isFinite(seconds) ? seconds : 30);
+        } else if (errorMsg.includes('rate-limit') || errorMsg.includes('login required')) {
           userMessage =
             '⚠️ <b>Service temporarily unavailable</b>\n\nPlease try again later or with a different video.';
         } else if (errorMsg.includes('not available')) {
@@ -1309,4 +1570,22 @@ bot.catch((err) => {
   });
 });
 
-bot.start();
+const main = async () => {
+  log('INFO', 'Bot starting up (long polling)…');
+  try {
+    await bot.start();
+  } catch (e) {
+    log('ERROR', 'bot.start() rejected', e);
+  }
+  // bot.start() resolved = bot was stopped. Wait for any in-flight cleanup to complete.
+  try {
+    await shutdownComplete;
+  } catch {
+    // noop
+  }
+};
+
+main().catch((e) => {
+  log('ERROR', 'Fatal in main()', e);
+  process.exit(1);
+});
