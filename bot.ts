@@ -1059,7 +1059,8 @@ bot.on('message:text', async (ctx) => {
 
       const statusEmoji = fileSizeMB > MAX_DIRECT_VIDEO_SIZE_MB ? '⚠️' : '✅';
       const sizeInfo = fileSizeMB > 0 ? `${fileSizeMB.toFixed(1)}MB` : 'calculating...';
-      const caption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | @SaveReelsNowBot`;
+      const username = ctx.from?.username ? `@${ctx.from.username}` : `ID: ${ctx.from?.id}`;
+      const caption = `✅ <b>Ready!</b> ⏱ ${responseTimeS}s | Requested by: ${username} | @SaveReelsNowBot`;
       const linkOptionsKeyboard = buildLinkOptionsKeyboard(response.url, text);
       const shouldSkipAllUploads = fileSizeMB > 0 && fileSizeMB > MAX_DOCUMENT_UPLOAD_SIZE_MB;
       const shouldTryDirectVideo = !(fileSizeMB > 0 && fileSizeMB > MAX_DIRECT_VIDEO_SIZE_MB);
