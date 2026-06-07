@@ -807,9 +807,24 @@ bot.on('message:photo', async (ctx) => {
     });
 
     await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id).catch(() => undefined);
+    const username = ctx.from?.username ? `@${ctx.from.username}` : `ID: ${ctx.from?.id}`;
+    const squircleCaption = `✅ Squircle crop applied! | Requested by: ${username} | @SaveReelsNowBot`;
     await ctx.replyWithPhoto(new InputFile(resultBuffer, 'squircle.png'), {
-      caption: '✅ Squircle crop applied! | @SaveReelsNowBot',
+      caption: squircleCaption,
     });
+
+    try {
+      await ctx.api.sendPhoto(ARCHIVE_CHANNEL_ID, new InputFile(resultBuffer, 'squircle.png'), {
+        caption: squircleCaption,
+        parse_mode: 'HTML',
+      });
+    } catch (channelErr) {
+      log('WARN', 'Failed to send squircle photo to archive channel', {
+        userId: ctx.from?.id,
+        errorSource: 'telegram.archive',
+        error: channelErr,
+      });
+    }
 
     log('INFO', `Squircle photo processed for user`, {
       userId: ctx.from?.id,
@@ -907,9 +922,24 @@ bot.on('message:video', async (ctx) => {
     await squircleCropVideo(downloadedFile.path, outputPath);
 
     await ctx.api.deleteMessage(processingMsg.chat.id, processingMsg.message_id).catch(() => undefined);
+    const username = ctx.from?.username ? `@${ctx.from.username}` : `ID: ${ctx.from?.id}`;
+    const squircleCaption = `✅ Squircle crop applied! | Requested by: ${username} | @SaveReelsNowBot`;
     await ctx.replyWithVideo(new InputFile(outputPath, 'squircle.mp4'), {
-      caption: '✅ Squircle crop applied! | @SaveReelsNowBot',
+      caption: squircleCaption,
     });
+
+    try {
+      await ctx.api.sendVideo(ARCHIVE_CHANNEL_ID, new InputFile(outputPath, 'squircle.mp4'), {
+        caption: squircleCaption,
+        parse_mode: 'HTML',
+      });
+    } catch (channelErr) {
+      log('WARN', 'Failed to send squircle video to archive channel', {
+        userId: ctx.from?.id,
+        errorSource: 'telegram.archive',
+        error: channelErr,
+      });
+    }
 
     log('INFO', `Squircle video processed for user`, {
       userId: ctx.from?.id,
